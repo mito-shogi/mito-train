@@ -1,0 +1,15 @@
+# cp .rclone.conf.example ~/.config/rclone/rclone.conf
+# それか環境変数 RCLONE_CONFIG=./.rclone.conf を渡す
+#
+# Access Key / Secret は Cloudflare Dashboard → R2 → API Tokens で発行。
+# TTL 90日でローテーションする運用。
+
+[r2]
+type = s3
+provider = Cloudflare
+env_auth = false
+access_key_id = REPLACE_WITH_R2_ACCESS_KEY_ID
+secret_access_key = REPLACE_WITH_R2_SECRET_ACCESS_KEY
+region = auto
+endpoint = https://<account-id>.r2.cloudflarestorage.com
+acl = private
