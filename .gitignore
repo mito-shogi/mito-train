@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+
+# 学習データ (R2 から pull するので Git 管理外)
+# ディレクトリ自体は残したいので /data/* で中身のみ無視 + .gitkeep を例外指定
+/data/*
+!/data/.gitkeep
+
+# ぴよ将棋のアセット (別途 R2 or 手動配置。詳細は docs/asset-layout.md)
+/assets/piyo/*
+!/assets/piyo/.gitkeep
+
+# 学習中間物
+runs/
+wandb/
+checkpoints/
+*.pt
+*.pth
+
+# ONNX モデル (Git で管理する運用にするなら /models/* を include に変える)
+# ※ mito_train/models/ (Python パッケージ) は除外しないため、ルート直下のみ指定
+/models/*
+!/models/.gitkeep
+
+# rclone 認証設定 (機密)
+.rclone.conf
+
+# Jupyter
+.ipynb_checkpoints/
+
+# エディタ / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
