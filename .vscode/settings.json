@@ -1,0 +1,10 @@
+{
+    "remote.localPortHost": "allInterfaces",
+    "python.terminal.activateEnvironment": false,
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/.venv": true,
+        "**/.ruff_cache": true,
+        "**/cache": true
+    }
+}
