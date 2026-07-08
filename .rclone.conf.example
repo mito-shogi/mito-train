@@ -1,0 +1,16 @@
+# rclone R2 remote 設定の雛形。
+# 実ファイルは `rclone config` で ~/.config/rclone/rclone.conf に作られる。
+# CI 等でリポジトリ内 .rclone.conf を使う場合はこれをコピーして値を埋める
+# (.rclone.conf は .gitignore 済み。絶対にコミットしないこと)。
+#
+#   cp .rclone.conf.example .rclone.conf
+#   # 値を埋めて:  rclone --config .rclone.conf lsd r2:
+
+[r2]
+type = s3
+provider = Cloudflare
+env_auth = false
+access_key_id = <ACCESS_KEY_ID>
+secret_access_key = <SECRET_ACCESS_KEY>
+region = auto
+endpoint = https://<ACCOUNT_ID>.r2.cloudflarestorage.com
