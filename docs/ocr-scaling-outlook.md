@@ -119,6 +119,20 @@ hand head は構造上 **駒の種類を間違えない**（`mito_train/models/b
 
 対症療法として v2 で `class weight sqrt+clip[0.5, 10.0]` を導入済み。現行データの raw weight は count=6 で 10.27、count=10 で 45.3、count=18 で 1658 なので、clip=10 は **count=7 以降を全部同じ重みにキャップ** している状態。希少枚数を細かく当てにいくには clip を上げるか regression 化が必要。本丸は上記 1 の regression 化。
 
+### val 分布の穴（評価に注意）
+
+val（`ocr_paired` val, 2,000 SFEN, 2026-07-12 実測）は train と分布形が違い、hand の改善評価に穴がある：
+
+- **val の 0 比率が 75.10%**（train は 65.68%）。「常に 0」ベースラインの val slot_acc が **10pt 底上げ**される。sweep で観測している `val/hand/slot_acc ≒ 0.99` はこの底上げ込み。
+- **count=11 以上が val に 1 件も無い**。歩 count=11〜18 は train に計 500 件超あるが val では見えない → **regression head の高枚数改善効果を val slot_acc では評価できない**。
+- count=10 は val 全体で 1 件のみ（S:P）。学習側は 293 件入ったのに、val での的中は事実上測れない。
+- 飛の非ゼロ率は val で 9.4% / 7.2%（train は 17.8% / 17.1%）。val でさらに希少。
+
+**含意**：
+- hand の改善効果は `val/hand/slot_acc` の全体値だけでなく、per-count recall（特に count ≥ 3）で追う
+- 歩高枚数（11〜18）の効果を測るには合成 mini-eval セットが要る、あるいは `test-realistic` 側で実測する
+- backbone sweep の val sfen_full が 33pt 開くのは、slot_acc よりも「たまに出る count ≥ 3 を当てられるか」で決まっている可能性が高い
+
 ### 解消済みの構造欠陥（参考）
 
 以前は歩スロットで **count=10 が学習データに 1 件も無い** ギャップがあり（piyo-hook 側の SFEN 出力バグ由来）、歩 10 枚を毎回 8/9/11 に誤読していた。現在は歩 count=10 局面が S:P で 148 件、G:P で 145 件、count=18 も 4/4 件収録されており、この構造欠陥は解消されている。分布としては依然として裾で希少（count=10 は全体の 0.12%）なので、対策 2（class weight）の対象には残っている。

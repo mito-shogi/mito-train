@@ -70,6 +70,16 @@ sweep のサマリ（val, epoch 50）：
 **現行データでの raw class weight（`grand_total / (HAND_MAX_COUNT * v)`）**：
 count=0 → 0.080、count=6 → 10.27、count=10 → 45.3、count=15 → 221、count=18 → 1658。5〜6 桁のレンジ。
 
+**val 分布の穴（2026-07-12 実測, n=2,000 SFEN）**：
+val は train と分布形が違う。
+- ラベル 0 の比率が **75.10%**（train 65.68%）。「常に 0」ベースラインの val slot_acc が **10pt 底上げ**される。
+- **count=11 以上が val に 1 件も無い**。歩 count=11〜18 は train には計 500 件超あるが val では見えないため、**regression head の高枚数改善効果を val slot_acc で評価できない**。
+- count=10 は val 全体で 1 件のみ（S:P）。
+- 飛の非ゼロ率は val で **9.4% / 7.2%**（train は 17.8% / 17.1%）。val でさらに希少。
+- 香/桂/銀/金は val 側でスロット別の max が偶発的に非対称（例：S:L max=2、G:L max=4）。per-slot accuracy の左右比較に要注意。
+
+→ **hand の改善評価は `val/hand/slot_acc` だけ見ない**。per-count recall（count ≥ 3）や、高枚数用の合成 mini-eval セット、`test-realistic` 側の実測を併用する。
+
 **素朴な `1 / freq` の危険性**：クラス重みが 5〜6 桁開く（count=0 で 0.08、count=18 で 1658）。希少クラスの勾配が暴発して学習不安定になるので、そのままは NG。
 
 **対応候補**：
