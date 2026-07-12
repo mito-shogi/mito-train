@@ -17,7 +17,7 @@
       collected for board-detector training but share the same SFEN pool).
 
 Usage:
-    uv run python scripts/eval_v3_baseline.py --screenshot-limit 2000
+    uv run python scripts/eval/eval_v3_baseline.py --screenshot-limit 2000
 """
 from __future__ import annotations
 

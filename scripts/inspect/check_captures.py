@@ -17,9 +17,9 @@ Reports per-device counts and prints a few examples per failure category.
 Exits 1 if anything looked broken.
 
 Usage (defaults to data/captures/ once piyo-hook has produced it):
-    uv run python scripts/check_captures.py
-    uv run python scripts/check_captures.py --root data/detector    # audit existing set
-    uv run python scripts/check_captures.py --no-content-check      # fast, file-level only
+    uv run python scripts/inspect/check_captures.py
+    uv run python scripts/inspect/check_captures.py --root data/detector    # audit existing set
+    uv run python scripts/inspect/check_captures.py --no-content-check      # fast, file-level only
 """
 from __future__ import annotations
 

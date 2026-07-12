@@ -19,10 +19,10 @@ rclone config                  # r2 remote を設定 (.rclone.conf.example 参�
 uv sync                        # pyproject.toml から依存を解決し .venv に構築
 
 # 3. データ pull (R2 → data/)
-./scripts/download-data.sh
+./scripts/r2/download-data.sh
 
 # 4. device 動作確認
-uv run python scripts/verify-gpu.py
+uv run python scripts/verify_gpu.py
 
 # 5. PoC 学習を試す
 uv run python -m mito_train.training.train_piece --data ./data/piyo-train --epochs 5
@@ -31,7 +31,7 @@ uv run python -m mito_train.training.train_piece --data ./data/piyo-train --epoc
 uv run python -m mito_train.export.to_onnx --model piece
 
 # 7. モデルを R2 に push
-./scripts/upload-models.sh
+./scripts/r2/upload-models.sh
 ```
 
 依存の追加は `uv add <pkg>` で行う (pyproject.toml を直接編集しない)。

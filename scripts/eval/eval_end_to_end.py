@@ -5,7 +5,7 @@ crop is fed to v3, and we measure Exact-Match on the resulting SFEN against
 data/test/test.jsonl.
 
 Usage:
-    python scripts/eval_end_to_end.py \
+    python scripts/eval/eval_end_to_end.py \
         --detector-ckpt runs/board-detector-v1/latest.pt \
         --ocr-ckpt runs/board-ocr-v3/latest.pt \
         --devices iPhone10,1 iPhone11,8 iPhone15,2

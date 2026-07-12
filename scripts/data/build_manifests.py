@@ -3,7 +3,7 @@
 Sources for fresh splits:
     assets/mate{3,5,7,9,11}.sfen        — natural game positions (~5M SFENs)
     assets/start_sfens_ply{24,32}.txt   — opening positions (~56k SFENs)
-    scripts/generate_high_hand_sfens.py — synthetic high-hand distribution
+    scripts/data/generate_synthetic_sfens.py — synthetic high-hand distribution
 
 TEST reuse:
     data/detector/<device>/*.webp × 4 machines all render the same 1000
@@ -33,8 +33,8 @@ each shared hash is expanded into one row per device with
 `{path, device, hash, sfen, type}`.
 
 Usage:
-    uv run python scripts/build_manifests.py               # default sizes
-    uv run python scripts/build_manifests.py --dry-run     # print plan only
+    uv run python scripts/data/build_manifests.py               # default sizes
+    uv run python scripts/data/build_manifests.py --dry-run     # print plan only
 """
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ from pathlib import Path
 ASSETS = Path("assets")
 NATURAL_FILES = [ASSETS / f"mate{n}.sfen" for n in (3, 5, 7, 9, 11)]
 OPENING_FILES = [ASSETS / "start_sfens_ply24.txt", ASSETS / "start_sfens_ply32.txt"]
-HIGH_HAND_SCRIPT = Path("scripts/generate_high_hand_sfens.py")
+HIGH_HAND_SCRIPT = Path("scripts/data/generate_synthetic_sfens.py")
 DETECTOR_ROOT = Path("data/detector")
 PARQUET_DIR = Path("uploads/eval/data")
 PARQUET_SFEN_LOOKUP_GLOB = "iPhone10_1-*-of-00010.parquet"
@@ -396,7 +396,7 @@ def main() -> int:
     print(f" 2) iPad14,10 → {ipad_path.name} も追加で撮影 ({len(ipad_only_rows)} 枚)")
     print(f" 3) TEST の既存 webp {fully_reused} × 4 = "
           f"{fully_reused * len(args.devices)} 枚を captures/ にコピー")
-    print(" 4) uv run python scripts/check_data.py で leak 0 / missing 0 を確認")
+    print(" 4) uv run python scripts/inspect/check_data.py で leak 0 / missing 0 を確認")
     return 0
 
 

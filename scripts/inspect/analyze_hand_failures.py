@@ -11,7 +11,7 @@ prints:
   - a sample of hashes for visual follow-up (optionally saves crops)
 
 Usage:
-    python scripts/analyze_hand_failures.py \
+    python scripts/inspect/analyze_hand_failures.py \
         --devices iPhone11,8 iPhone15,4 \
         --dump-samples 12 --dump-dir runs/hand-fail-samples
 """

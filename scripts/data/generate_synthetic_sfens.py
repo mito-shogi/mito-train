@@ -24,7 +24,7 @@ Output: `data/synthetic_sfens.jsonl` matching the eval convention:
     {"sfen": <sfen>, "hash": <sha256(sfen)>}
 
 Usage:
-    uv run python scripts/generate_high_hand_sfens.py \
+    uv run python scripts/data/generate_synthetic_sfens.py \
         --count 10000 --out data/synthetic_sfens.jsonl
 """
 from __future__ import annotations

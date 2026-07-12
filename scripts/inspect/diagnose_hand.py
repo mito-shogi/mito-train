@@ -7,7 +7,7 @@ Loads a board-ocr checkpoint and reports:
   - confusion matrix: true count -> predicted count (aggregated across slots)
 
 Usage:
-    uv run python scripts/diagnose_hand.py \
+    uv run python scripts/inspect/diagnose_hand.py \
         --ckpt ./runs/board-ocr-v2/latest.pt \
         --val-manifest ./data/ocr/val.jsonl \
         --image-root ./data/ocr/iPhone10,1
