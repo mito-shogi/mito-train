@@ -4,6 +4,9 @@ Usage:
     # Smoke (overfit pieces/k1): sanity-checks device / W&B / training loop wiring
     python -m mito_train.training.train_piece --mode smoke
 
+    # Resume from the last checkpoint in --ckpt-dir (bumps --epochs to keep going)
+    python -m mito_train.training.train_piece --mode smoke --resume latest --epochs 80
+
     # Real training (via manifest): not yet implemented
     python -m mito_train.training.train_piece --mode manifest --data ./data/piyo-train
 
@@ -105,9 +108,32 @@ def run_smoke(args: argparse.Namespace) -> None:
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
+    args.ckpt_dir.mkdir(parents=True, exist_ok=True)
+    start_epoch = 1
+    resumed_from: str | None = None
+    resumed_wandb_id: str | None = None
+    if args.resume is not None:
+        ckpt_path = args.ckpt_dir / "latest.pt" if str(args.resume) == "latest" else args.resume
+        print(f"[smoke] resume from {ckpt_path}")
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model"])
+        optimizer.load_state_dict(ckpt["optimizer"])
+        start_epoch = ckpt["epoch"] + 1
+        resumed_from = str(ckpt_path)
+        resumed_wandb_id = ckpt.get("wandb_run_id")
+        print(f"[smoke] resumed at epoch={start_epoch} (ckpt was epoch {ckpt['epoch']})")
+        if resumed_wandb_id:
+            print(f"[smoke] will resume wandb run id={resumed_wandb_id}")
+
+    if args.wandb_run_id:
+        resumed_wandb_id = args.wandb_run_id
+        print(f"[smoke] wandb run id overridden by CLI: {resumed_wandb_id}")
+
     run = _init_wandb(
         project="mito-train-smoke",
         run_name="piece-smoke",
+        run_id=resumed_wandb_id,
+        resume="allow" if resumed_wandb_id else None,
         config={
             "mode": "smoke",
             "themes": args.themes,
@@ -115,14 +141,18 @@ def run_smoke(args: argparse.Namespace) -> None:
             "batch_size": args.batch_size,
             "lr": args.lr,
             "epochs": args.epochs,
+            "start_epoch": start_epoch,
+            "resumed_from": resumed_from,
             "num_classes": ds.num_classes,
             "n_params": n_params,
             "device": device,
         },
     )
 
+    avg_loss = 0.0
+    acc = 0.0
     model.train()
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         total_loss = 0.0
         correct = 0
         total = 0
@@ -139,10 +169,22 @@ def run_smoke(args: argparse.Namespace) -> None:
             total += x.size(0)
         avg_loss = total_loss / total
         acc = correct / total
-        if epoch % args.log_every == 0 or epoch in (1, args.epochs):
+        if epoch % args.log_every == 0 or epoch in (start_epoch, args.epochs):
             print(f"[smoke] epoch={epoch:3d} loss={avg_loss:.4f} acc={acc:.4f}")
         if run is not None:
             run.log({"train/loss": avg_loss, "train/acc": acc, "epoch": epoch})
+
+        ckpt_payload = {
+            "epoch": epoch,
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+            "num_classes": ds.num_classes,
+            "input_size": args.input_size,
+            "wandb_run_id": run.id if run is not None else None,
+        }
+        torch.save(ckpt_payload, args.ckpt_dir / "latest.pt")
+        if epoch % args.save_every == 0 or epoch == args.epochs:
+            torch.save(ckpt_payload, args.ckpt_dir / f"epoch-{epoch:03d}.pt")
 
     print(f"[smoke] final acc={acc:.4f} loss={avg_loss:.4f}")
     if acc < 0.95:
@@ -189,6 +231,14 @@ def main() -> None:
     p.add_argument("--batch-size", type=int, default=32)
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--out", type=Path, default=Path("./runs/piece-cnn"))
+    p.add_argument("--ckpt-dir", type=Path, default=Path("./runs/piece-cnn"),
+                   help="Directory for latest.pt / epoch-{N}.pt checkpoints.")
+    p.add_argument("--save-every", type=int, default=10,
+                   help="Interval for saving epoch-{N}.pt snapshots. latest.pt is saved every epoch.")
+    p.add_argument("--resume", type=Path, default=None,
+                   help="Checkpoint path. Pass 'latest' to load --ckpt-dir/latest.pt.")
+    p.add_argument("--wandb-run-id", type=str, default=None,
+                   help="Force resume this W&B run id (overrides ckpt's stored id).")
     args = p.parse_args()
 
     if args.mode == "smoke":

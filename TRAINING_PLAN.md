@@ -93,9 +93,7 @@ epoch 20 時点の val 側：
 
 ### E. resume 対応の横展開（優先度：中）
 
-現在 `--resume` を持つのは `train_board_ocr.py` と `train_detector.py` のみ。以下に同じ形で追加：
-
-- `train_piece.py`
+`--resume` は `train_board_ocr.py`, `train_detector.py`, `train_piece.py` の 3 script に横展開済み。
 
 含める state：`model`, `optimizer`, `epoch`, `scheduler`（導入時）, `rng`（厳密再現したいとき）。
 
