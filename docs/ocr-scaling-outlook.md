@@ -32,12 +32,12 @@ feat/ddp-and-backbone-sweep で回した 9 バックボーンの sweep 結果（
 | convnext_femto | 4.9M | 0.992 | 0.645 | 0.589 | 0.0635 |
 | efficientnet_b1 | 6.9M | 0.992 | 0.663 | 0.475 | 0.1093 |
 | convnext_pico | 8.7M | 0.992 | 0.634 | 0.632 | 0.0520 |
+| convnext_nano | 15.1M | 0.993 | 0.660 | 0.680 | 0.0436 |
 | **convnext_tiny** | **28.0M** | **0.994** | **0.716** | 0.659 | 0.0560 |
-| convnext_nano | 15.1M | ― | ― | (途中終了、8 epoch まで) | ― |
 
 - `val cell_acc` は **どのモデルも 0.966〜0.994** で頭打ち感。差は 3pt 弱。
 - `val sfen_full` は **0.385〜0.716** で **33pt** も開く。プライマリ指標はまだまだ動く。
-- convnext_nano は sweep 途中で止まっているので今回は評価対象外（8 epoch で val cell 0.989 / sfen 0.503 まで来ていたので、走り切れば pico〜femto と同格になりそう）。
+- convnext_nano は再学習して 50 epoch 完走（run `nyrsx25c`）。0.660 で **efficientnet_b0 (0.661) とほぼ同点**、pico (0.634) からは +2.6pt、tiny (0.716) には -5.6pt 届かず。15.1M の割に伸び切らず、Pareto 上では efficientnet_b0 (4.4M) と重なる位置。**train sfen 0.680 > val 0.660** で train 側の伸び余地は残っている。
 
 train と val のギャップは全モデルで **val > train**（board head は val が優勢、hand head は val の方が難しい局面が来る）。過学習の兆候は現時点ゼロで、まだエポックを伸ばしてよい状態。
 
@@ -54,6 +54,7 @@ val は 2 epoch おき測定なので、代表点として ep10 / 20 / 30 / 40 /
 | convnext_femto | 0.529 | 0.577 | 0.612 | 0.643 | 0.645 | +0.002 |
 | efficientnet_b1 | 0.428 | 0.526 | 0.596 | 0.637 | 0.663 | **+0.026** |
 | convnext_pico | 0.512 | 0.598 | 0.618 | 0.641 | 0.634 | -0.007 |
+| convnext_nano | 0.586 | 0.626 | 0.640 | 0.647 | 0.660 | +0.013 |
 | convnext_tiny | 0.620 | 0.690 | 0.710 | 0.699 | 0.716 | +0.017 |
 
 読み取れること：
@@ -62,6 +63,7 @@ val は 2 epoch おき測定なので、代表点として ep10 / 20 / 30 / 40 /
 - **mobilenet_v3_small は 40 epoch で頭打ち**。1.1M パラの容量律速でここから伸ばしても線形改善は期待できない。
 - **convnext_atto と convnext_pico はサイズ違いなのに ep50 で 0.611 / 0.634 でほぼ団子**。ep40 でも同傾向。ConvNeXt 系はこの容量帯（3〜9M）で頭打ちしている可能性大。
 - **EfficientNet 系（b0, b1）は 40→50 で +2pt 以上伸びており、直近 10 epoch でも上げ足を残している**。
+- **convnext_nano は ep30→50 で +0.020、ep40→50 で +0.013 の緩やかな上昇**で飽和には至っていない。ただし ep50 で 0.660 は efficientnet_b0 (0.661) と同点で、pico からのスケーリング効率は悪い。ConvNeXt の 3.5M/4.9M/8.7M/15.1M で 0.611/0.645/0.634/0.660 と非単調、この容量帯全体が hand head 側で律速されている疑いが強い。
 - **convnext_tiny は ep30 で 0.710 に到達し ep40 でノイズで下がったが ep50 で再度 0.716**。5 epoch 移動平均を取ればまだ緩やかに上向き。飽和はまだ。
 
 ## エポックを伸ばしたときの見込み
@@ -82,6 +84,7 @@ val は 2 epoch おき測定なので、代表点として ep10 / 20 / 30 / 40 /
 | convnext_femto | +0.033 | ~0.66 | ~0.69 | 中庸 |
 | efficientnet_b1 | +0.067 | **~0.70** | **~0.73** | 直近の勾配が最良 |
 | convnext_pico | +0.016 | ~0.65 | ~0.67 | atto と同水準に張り付き |
+| convnext_nano | +0.020 | ~0.68 | ~0.71 | 15.1M の割に伸び切らず、b0 と同格 |
 | convnext_tiny | +0.006 | ~0.73 | **~0.76** | ばらつきあり、平均で微増 |
 
 これは **「同じ lr のまま 100 epoch まで回した場合」** の見込みで、実運用の伸び余地としては **cosine annealing / ReduceLROnPlateau を入れたときの +0.02〜0.03** をそこに乗せた側が現実的な上限。
@@ -183,6 +186,7 @@ epoch 50 相当で回したときの val sfen_full の見込みレンジ：
 | convnext_femto | 0.645 | 0.70〜0.75 | 0.77〜0.82 |
 | efficientnet_b1 | 0.663 | 0.72〜0.77 | 0.79〜0.84 |
 | convnext_pico | 0.634 | 0.71〜0.75 | 0.77〜0.82 |
+| convnext_nano | 0.660 | 0.72〜0.76 | 0.78〜0.83 |
 | **convnext_tiny** | **0.716** | **0.77〜0.82** | **0.83〜0.88** |
 
 この見込みは **image_size 効果 (backbones.md の想定)** + **既にある epoch トラジェクトリ** + **hand head の残り改善** を足したもの。convnext_tiny × 384 で **0.85 台**、実用ライン 90% には **もう一押し必要** な位置。
@@ -222,15 +226,15 @@ convnext_tiny × 384 × distill → 0.88〜0.92 (実用ライン到達)
 0.93+ (SNS 実運用ライン)
 ```
 
-**convnext_tiny × 384 に到達しても素の sfen_full は 0.85 前後で、90% には蒸留 or 後処理が要る** というのが今回の sweep から出る現実的な見立て。ブラウザ配信の本命 convnext_nano は今回未完走なので、次の sweep で必ず走らせて Pareto を埋める。
+**convnext_tiny × 384 に到達しても素の sfen_full は 0.85 前後で、90% には蒸留 or 後処理が要る** というのが今回の sweep から出る現実的な見立て。ブラウザ配信の本命 convnext_nano は 15.1M ながら val 0.660 に留まり、efficientnet_b0 (4.4M) と同点。Pareto フロント上ではむしろ **efficientnet_b0 の方がサイズ効率で優位**、精度上限を狙うなら **convnext_tiny (28.0M)** が唯一の選択肢という構図。
 
 ## 直近の推奨アクション
 
 sweep 結果を踏まえた次のイテレーション優先順位：
 
-1. **hand head の regression 化**（`TRAINING_PLAN.md#A`）。cell_acc は据置きで sfen_full が跳ねる可能性大。実装コスト最小、まず切って効果測定。
-2. **convnext_nano の再学習**（今回未完走）。tiny の 15MB 版として実運用第一候補。
-3. **image_size=288 での再 sweep**。まずは mobilenet_v3_small / convnext_atto / convnext_tiny の 3 点で効果測定。
+1. **hand head の regression 化**（`TRAINING_PLAN.md#A`）。cell_acc は据置きで sfen_full が跳ねる可能性大。実装コスト最小、まず切って効果測定。convnext_nano/pico/atto/femto がまとめて hand 側で律速されている疑いを直接叩ける。
+2. **image_size=288 での再 sweep**。まずは mobilenet_v3_small / convnext_atto / convnext_tiny / **efficientnet_b0** の 4 点で効果測定。b0 は Pareto 効率が良いので nano より優先。
+3. **convnext_nano の扱いを再検討**。15.1M で 0.660 は Pareto 上で b0 (4.4M, 0.661) に負けており、ブラウザ配信本命の座は再評価が必要。tiny の 15MB 版としての位置付けは要更新。
 4. **cosine annealing の導入**（`TRAINING_PLAN.md#D`）。resume 対応と同時に。
 5. **image_size=384 は convnext_atto / tiny のみ、蒸留と一緒に**。VRAM とのトレードで動く backbone だけ選ぶ。
 6. **hand 分布の再集計**（`scripts/inspect/analyze_hand_distribution.py`）。歩 count=10 収録後の最新分布を確認し、class weight の clip 値を再調整するか判断する。
@@ -265,4 +269,4 @@ W&B project: `mito-train-board-ocr`。今回の sweep run 一覧：
 | convnext_pico | vw4mk54g |
 | efficientnet_b1 | 5h2kp29v |
 | convnext_tiny | r4c7icav |
-| convnext_nano | nyrsx25c (未完走) |
+| convnext_nano | nyrsx25c |

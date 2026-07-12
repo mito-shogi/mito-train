@@ -19,8 +19,8 @@ sweep のサマリ（val, epoch 50）：
 | convnext_femto | 4.9M | 0.992 | 0.645 |
 | efficientnet_b1 | 6.9M | 0.992 | 0.663 |
 | convnext_pico | 8.7M | 0.992 | 0.634 |
+| convnext_nano | 15.1M | 0.993 | 0.660 |
 | convnext_tiny | 28.0M | 0.994 | 0.716 |
-| convnext_nano | 15.1M | (未完走) | (未完走) |
 
 分布可視化ツール：`scripts/inspect/analyze_hand_distribution.py`（出力: `runs/hand-distribution.png`）
 
@@ -237,3 +237,124 @@ epoch を長めに指定して回すぶん、val 指標が K エポック改善�
 **config**：`EPOCHS=60 BATCH_SIZE=128 LR=6e-4 IMAGE_SIZE=288 BACKBONE=mobilenet_v3_small`
 **ckpt出力**：`runs/board-ocr-v2/`
 **目標**：epoch 60 で sfen_acc > 0.55（v1 の 45 epoch 相当を超える）
+
+## v3（HF natural + synthetic マージ版）
+
+### 見つけた偏り
+
+v2 は HF `ultemica/piyoshogi` `ocr_paired` train（18,000 SFEN、`build_manifests.py` で作った natural 40% + opening 20% + synthetic 40% + existing のミックス）を教師に使っていた。そこには **hand 側に強い分布バイアス** があった（2026-07-12 実測）：
+
+| 指標 | v2 データ (HF 18k) |
+|---|---:|
+| slot ラベル 0（空スロット）の比率 | **65.68%** |
+| slot ラベル 1 の比率 | 21.20% |
+| slot ラベル 3 以上の合計 | ~4% |
+| 歩 count=7 以上の合計 | ほぼゼロ |
+| 歩 count=18 の観測 | 4 件（train 全体で） |
+
+- 常に 0 を答えるだけで slot_acc **65.68%** が出る構造。hand head の勾配が「0 を当てにいく」方向に寄る。
+- 高枚数（3〜18）は裾でしか観測されず、隣接ミス（5 vs 6, 10 vs 11）の学習信号が薄い。
+- 飛 (R) / 角 (B) は非ゼロ率が **17〜42%** に留まる。
+- val 側（2,000 SFEN）は train より更に極端で、**count=11 以上が 1 件も無い**。「regression head を入れたい」って言っても val で効果測定ができない。
+
+詳細は `docs/ocr-scaling-outlook.md#hand-の失敗パターン` に集約。
+
+### 偏りの修正手順
+
+**方針**：HF 18k は捨てず、そこに **裾を厚くした synthetic 10k を足す**。ただし単純ユニオンだと HF 側の 0 バイアスがそのまま重みで持ち込まれるので、**HF 側も rare-preserving で 10k に間引き、10k + 10k = 20k の均等 mix** に落ち着かせる。synth 側の SFEN は piyo-hook で HF と同じ 4 端末（iPhone10,1 / 11,8 / 15,4 / iPad14,10）で撮影して、**画像スタイルは 20k 全件で統一**する。合成レンダラは使わない（画像スタイルと分布の相関を学習するリスクを避ける）。
+
+1. **`scripts/data/generate_synthetic_sfens.py`**: `python-shogi` でランダム対局を回し、途中局面から **piece type ごとに Uniform[0, PIECE_MAX] で hand をサンプリング**。盤上の駒を hand に移すだけで生成するので、nifu / per-type 総数保存 / logit マスクとの整合はすべて自動で満たされる。作成: `data/synth_train_sfens.jsonl` (15,000)、`data/synth_val_sfens.jsonl` (2,500)。
+2. **`scripts/data/subsample_synthetic_sfens.py`**: 15,000 は多いので **希少局面を残したまま 10,000 に間引き**。希少判定は「どこかの slot で count ≥ 3」OR「飛 / 角が hand に入っている」の OR 条件。実測では 14,906 件（99.4%）が rare 判定に入り、残り 94 件の「完全に静かな局面」だけがマジョリティから抜けた。rare 判定内は uniform で subsample。原本は `data/synth_train_sfens.jsonl.bak` に退避済み。
+3. **piyo-hook で 4 端末撮影**: `data/synth_train_sfens.jsonl` / `data/synth_val_sfens.jsonl` の全 SFEN を 4 端末でキャプチャ。1 SFEN × 4 端末 = 40,000 webp（train）+ 10,000 webp（val）。HF 既存分と合わせて `data/ocr/<device>/<hash>.webp` に配置。
+4. **`scripts/data/build_v3_manifest.py`**: HF cache の parquet から `sfen, hash, type` だけを pyarrow で吸い出し（画像列は触らない）、HF train 18k を同じ rare-preserving ルールで 10k に間引き、synth 10k と concat して `data/ocr_v3/train.jsonl` (20,000 行) を書き出す。val は subsample せず HF 2k + synth 2.5k = 4,500 行を全部残す。hash 重複は natural 側優先（実機 webp を持っている方を残す）。
+
+### 修正結果（v3 train 20k、`data/ocr_v3/` の実測値）
+
+| 指標 | v2 (HF 18k) | **v3 train 20k (実測)** | v3 - v2 |
+|---|---:|---:|---:|
+| count=0 の比率 | 65.68% | **54.03%** | **-11.6pt** |
+| count=1 の比率 | 21.20% | 24.25% | +3.0pt |
+| count=3 以上の合計 | ~4% | **11.41%** | +7.4pt |
+| count=7 の比率 | ~0% | 0.55% | +0.55pt |
+| count=10 の比率 | 0.12% | 0.28% | +0.16pt |
+| count=15 の比率 | ~0 | 0.07% | +0.07pt |
+| count=18 の観測 | 4 件 | **17 件** | +13 |
+| 飛の非ゼロ率 (S:R / G:R) | 17.8% / 17.1% | **30.1% / 28.5%** | 約 +12pt |
+| 角の非ゼロ率 (S:B / G:B) | 42.9% / 41.5% | 44.5% / 43.6% | ほぼ同 |
+| 歩の非ゼロ率 (S:P / G:P) | 68.0% / 64.0% | **78.4% / 77.1%** | +10〜13pt |
+
+「常に 0 ベースライン」の slot_acc が **65.7% → 54.0%**（-11.6pt）。pure synth 10k で得られる -20pt には届かないが、**サンプル数は 20k に増え、画像スタイルは実機で統一**。当初の見込み ~58.5% より 4.5pt 良かったのは、HF 18k の rare-preserving subsample がよく効いたため（18k 中 15,678 件（87%）が rare 判定に入り、common 側の「完全に静かな 8000 件」だけが落ちた）。
+
+**v3 val の分布（4,500 行、`data/ocr_v3/val.jsonl` 実測）**：
+
+| 指標 | v2 val (HF 2k) | **v3 val 4.5k (実測)** |
+|---|---:|---:|
+| count=0 の比率 | 75.10% | **58.88%** |
+| count=3 以上の合計 | 2.98% | 9.61% |
+| count=11 以上の観測 | **0 件** | 通算 335 件（count=11 で 120、count=18 で 5） |
+| count=18 の観測 | 0 件 | **5 件** |
+
+**val の count=11+ 問題が解消**され、regression head や高枚数向け class weight の効果を `val/hand/slot_acc` の per-count recall で直接評価できるようになった。
+
+### 20k の内訳（provenance タグ、`type` field）
+
+`build_v3_manifest.py` の実行結果より：
+
+| type | 件数 | 由来 |
+|---|---:|---|
+| `synthetic` | 12,770 | 今回作った synth 10k + HF に元々含まれていた synth の残り |
+| `existing` | 3,658 | HF の既存撮影済み `data/detector/*` reuse 分 |
+| `natural` | 2,643 | HF の mate 系（`assets/mate{3,5,7,9,11}.sfen`）由来 |
+| `opening` | 929 | HF の opening 系（`assets/start_sfens_ply{24,32}.txt`）由来 |
+| **合計** | **20,000** | |
+
+per-source per-count recall を取れば、synth が hand tail の学習にどれだけ効いたかを直接測れる。
+
+### v3 で調整するパラメータ
+
+**必要な変更（データマージに伴う）**：
+
+- **train データソース**: `--hf-repo-id` の HF loader だけでは synth 分が読めない。実装コストの低い順に：
+  - **(a) 新 HF split を publish**: `build_paired_to_hf.py` を synth 撮影後の webp も拾うよう拡張し、`ocr_paired_v3` として push。既存の HF loader をそのまま使える。**推奨**。`data/ocr_v3/train.jsonl` と `data/ocr_v3/val.jsonl` はこの入口に渡す形。
+  - **(b) train_board_ocr.py に extra jsonl の入口**: `--extra-train-jsonl` / `--extra-val-jsonl` を追加、HF pool と concat する `ConcatDataset` にする。HF publish 手間を省ける代わりに loader 側に merge ロジックが増える。
+- **`--class-weight-clip-max 10.0 → 15.0`**: v3 20k 実測の raw class weight は count=10 で 19.1、count=15 で 78.4、count=18 で 867。旧 clip=10 だと **count≥7 が全部同じ重み**でキャップされる。**clip を 15 に緩める** と sqrt 後 count=7 で 3.10、count=10 で 4.37、count=13 で 6.62、count=15 で 8.85、count=17 以上が 15 でキャップ、と個別に立ち上がる。それより上は継続キャップ。
+- **`EPOCHS=60 → 50`**: サンプル数が 18k → 20k で 11% 増、batch=128 では **epoch あたり 141 → 156 ステップ**、v2 の 60 epoch (8460 steps) 相当は約 **54 epoch** で並ぶ。**50 epoch（v2 比 -8% 総ステップ、cosine scheduler で後半の実効 lr を下げるぶんはトントン）** に設定して cosine と組で回す。
+
+**推奨追加（既存の TODO を v3 で入れると綺麗）**：
+
+- **§D LR scheduler の導入**: `AdamW(lr=6e-4)` 固定を `CosineAnnealingLR(T_max=EPOCHS)` に。resume 時は scheduler state も ckpt に含める。データが変わって baseline を再取得する v3 は、scheduler も同時投入して次の baseline に組み込む好機。
+- **`--hand-mode regression` の CLI 露出**: model 側の実装 (`board_ocr.py`) は既にあるが `train_board_ocr.py` に CLI 引数が無い。マージ後の分布は count=3〜18 が実在するので、regression head の効果測定は v2 データより格段にやりやすい。**別実験として v3-cls / v3-reg の 2 系統を並行して回すのが理想**。
+
+**据置き**：
+
+- `BATCH_SIZE=128` / `IMAGE_SIZE=288` / `BACKBONE=mobilenet_v3_small`: v2 との direct delta を測るため、まずはこの 3 点を据え置き、データ差 + class weight + epoch + scheduler の効果を分離する。backbone / image_size の bump は v3 の結果を見てから、v4 で入れる。
+- **`hand_weight=1.0`**: v2 で入れた設定、そのまま。
+- **X-1 hand logit マスキング**: そのまま。
+
+### v3 想定 config
+
+```bash
+# 前提: HF に ocr_paired_v3 が publish 済み、あるいは train_board_ocr.py に extra jsonl 入口がある。
+EPOCHS=50 \
+BATCH_SIZE=128 \
+LR=6e-4 \
+IMAGE_SIZE=288 \
+BACKBONE=mobilenet_v3_small \
+CKPT_DIR=./runs/board-ocr-v3 \
+HF_REPO_ID=ultemica/piyoshogi \  # または v3 split の repo
+./scripts/train.sh \
+    --class-weight-clip-max 15.0 \
+    --lr-scheduler cosine  # 実装後
+```
+
+**目標**：sfen_full > 0.60（v2 baseline を追加 hand 分布で越える）。同時に per-count recall（特に count=5〜18）を `scripts/inspect/diagnose_hand.py` で計測して、v2 との hand 側改善差を数字で押さえる。**per-source (natural / synthetic) の per-count recall** も並行して見ると、synth の効きを直接評価できる。
+
+### 開始前チェックリスト
+
+1. **piyo-hook 撮影完了待ち**: `data/synth_train_sfens.jsonl` + `data/synth_val_sfens.jsonl` の全 SFEN が 4 端末で撮影されて `data/ocr/<device>/<hash>.webp` に落ちること。所要時間はデータ量次第（10k+2.5k SFEN × 4 端末 = 50,000 webp）。
+2. **manifest 統合（済）**: `scripts/data/build_v3_manifest.py` を実行済み。`data/ocr_v3/train.jsonl` (20,000 行) と `data/ocr_v3/val.jsonl` (4,500 行) が生成済み。この 2 本を parquet 化担当に渡して `ocr_paired_v3` に育ててもらう。
+3. **HF publish or extra jsonl 対応**: (a) `build_paired_to_hf.py` を `data/ocr_v3/` 入力に切り替えて回し `ocr_paired_v3` として push、または (b) `train_board_ocr.py` に `--extra-train-jsonl` の入口を追加。
+4. §D CosineAnnealingLR の実装 + resume 対応。
+5. `--hand-mode` CLI 引数の追加（別実験線として）。
+6. `--class-weight-clip-max` を 15 に上げても勾配が暴発しないことを 5 epoch で確認。
+7. baseline 比較のため v2 の epoch 60 ckpt を凍結（`runs/board-ocr-v2/` を触らない）。

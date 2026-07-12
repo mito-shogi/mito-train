@@ -388,8 +388,8 @@ def run(args: argparse.Namespace) -> None:
                         "step/hand_loss": hl.item(),
                         "step/board/cell_acc": m["board/cell_acc"].item(),
                         "step/hand/slot_acc": m["hand/slot_acc"].item(),
-                        "step": global_step,
-                        "epoch_frac": epoch - 1 + n_batches / len(train_loader),
+                        "step/global_step": global_step,
+                        "step/epoch_frac": epoch - 1 + n_batches / len(train_loader),
                     })
 
         # Reduce per-rank means to a single global mean per metric before
@@ -414,7 +414,7 @@ def run(args: argparse.Namespace) -> None:
             "train/loss": avg_loss,
             "train/board_loss": avg_bl,
             "train/hand_loss": avg_hl,
-            "epoch": epoch,
+            "train/epoch": epoch,
         }
         wandb_log.update({f"train/{k}": v for k, v in avg.items()})
 

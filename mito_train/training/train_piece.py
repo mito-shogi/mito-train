@@ -59,9 +59,7 @@ def _init_wandb(
         print("[wandb] wandb is not installed (`uv sync --extra experiment`), skipping.")
         return None
 
-    # x_disable_stats=True suppresses the auto-collected system metrics
-    # (GPU/CPU/mem/disk) that populate the "Charts" tab — noise for this project.
-    settings_kwargs: dict = {"x_disable_stats": True}
+    settings_kwargs = {}
     cf_id = os.environ.get("CF_ACCESS_CLIENT_ID")
     cf_secret = os.environ.get("CF_ACCESS_CLIENT_SECRET")
     if cf_id and cf_secret:
@@ -71,7 +69,7 @@ def _init_wandb(
         }
         print("[wandb] injected CF Access headers.")
 
-    settings = wandb.Settings(**settings_kwargs)
+    settings = wandb.Settings(**settings_kwargs) if settings_kwargs else None
     init_kwargs = dict(project=project, name=run_name, config=config, settings=settings)
     if run_id is not None:
         init_kwargs["id"] = run_id
@@ -174,7 +172,7 @@ def run_smoke(args: argparse.Namespace) -> None:
         if epoch % args.log_every == 0 or epoch in (start_epoch, args.epochs):
             print(f"[smoke] epoch={epoch:3d} loss={avg_loss:.4f} acc={acc:.4f}")
         if run is not None:
-            run.log({"train/loss": avg_loss, "train/acc": acc, "epoch": epoch})
+            run.log({"train/loss": avg_loss, "train/acc": acc, "train/epoch": epoch})
 
         ckpt_payload = {
             "epoch": epoch,
