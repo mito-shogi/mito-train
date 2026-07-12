@@ -9,11 +9,9 @@ Real training (intended to run on a GPU machine) uses --mode full to iterate ove
 from __future__ import annotations
 
 import argparse
-import os
 from pathlib import Path
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import ConcatDataset, DataLoader
 

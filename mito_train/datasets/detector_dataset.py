@@ -29,7 +29,6 @@ from typing import Literal
 
 import albumentations as A
 import cv2
-import numpy as np
 import torch
 from albumentations.pytorch import ToTensorV2
 from torch.utils.data import Dataset

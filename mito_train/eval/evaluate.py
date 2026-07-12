@@ -6,6 +6,7 @@ Usage:
 TODO: chain the 3 models, build the SFEN, and compare against annotations.json.
 """
 from __future__ import annotations
+
 import argparse
 import json
 from pathlib import Path

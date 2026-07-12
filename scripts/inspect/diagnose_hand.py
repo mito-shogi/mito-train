@@ -13,6 +13,7 @@ Usage:
         --image-root ./data/ocr/iPhone10,1
 """
 from __future__ import annotations
+
 import argparse
 from pathlib import Path
 

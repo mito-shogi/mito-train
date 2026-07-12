@@ -10,6 +10,7 @@ Usage:
 The manifest mode currently lacks a DataLoader / training loop (waiting on the piyo-hook side to deliver a manifest).
 """
 from __future__ import annotations
+
 import argparse
 import os
 from pathlib import Path

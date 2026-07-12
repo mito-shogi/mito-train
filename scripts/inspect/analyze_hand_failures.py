@@ -150,13 +150,13 @@ def main() -> None:
               f"({n_hand_wrong/len(paths)*100:.2f}%)")
 
         # Per-slot ranking
-        print(f"[hand-fail] top mismatched slots (slot: mismatched images):")
+        print("[hand-fail] top mismatched slots (slot: mismatched images):")
         for s, c in slot_mismatch.most_common():
             print(f"    {slot_label(s):>10}  slot={s:2d}   {c:>5} imgs "
                   f"({c/len(paths)*100:.2f}%)")
 
         # Top confusions per slot (only for the top-3 problem slots)
-        print(f"[hand-fail] top confusions on worst 3 slots (GT -> Pred, count):")
+        print("[hand-fail] top confusions on worst 3 slots (GT -> Pred, count):")
         for s, _ in slot_mismatch.most_common(3):
             print(f"    {slot_label(s)} (slot {s}):")
             for (gt_c, pr_c), cnt in conf[s].most_common(6):

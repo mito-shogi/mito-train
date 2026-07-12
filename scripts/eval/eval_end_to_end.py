@@ -96,7 +96,7 @@ def main() -> None:
     ocr_S = ocr_ck["image_size"]
 
     if args.use_gt_bbox:
-        print(f"[e2e] mode=OCR-only (GT bbox from device_bboxes.json)")
+        print("[e2e] mode=OCR-only (GT bbox from device_bboxes.json)")
     else:
         print(f"[e2e] detector={args.detector_ckpt} (S={det_S})")
     print(f"[e2e] ocr={args.ocr_ckpt} (S={ocr_S})")
@@ -119,7 +119,6 @@ def main() -> None:
         hits = board_perfect = hand_perfect = 0
         cell_correct = cell_total = 0
         hand_correct = hand_total = 0
-        ious_via_gt: list[float] = []
         t0 = time.time()
         for i in range(0, len(paths), args.batch_size):
             batch = paths[i:i + args.batch_size]

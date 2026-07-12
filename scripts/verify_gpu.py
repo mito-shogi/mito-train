@@ -10,6 +10,7 @@ else:
 
 # 簡単な matmul で計測
 import time
+
 device = 'cuda' if torch.cuda.is_available() else ('mps' if torch.backends.mps.is_available() else 'cpu')
 x = torch.randn(4096, 4096, device=device)
 y = torch.randn(4096, 4096, device=device)
