@@ -47,29 +47,37 @@ def compute_hand_class_weights(
 
 def compute_loss(
     board_logits: torch.Tensor,  # (B, 29, 9, 9)
-    hand_logits: torch.Tensor,   # (B, 14, 19)
+    hand_out: torch.Tensor,      # (B, 14, 19) or (B, 14)
     board_target: torch.Tensor,  # (B, 9, 9)
     hand_target: torch.Tensor,   # (B, 14)
+    hand_mode: str = "classification",
     hand_weight: float = 1.0,
     hand_class_weight: torch.Tensor | None = None,
+    smooth_l1_beta: float = 1.0,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Weighted sum of board CE + hand CE."""
+    """Weighted sum of board CE + hand loss (CE for classification / SmoothL1 for regression)."""
     board_loss = F.cross_entropy(board_logits, board_target)
-    B, S, C = hand_logits.shape
-    hand_loss = F.cross_entropy(
-        hand_logits.reshape(B * S, C),
-        hand_target.reshape(B * S),
-        weight=hand_class_weight,
-    )
+    if hand_mode == "classification":
+        B, S, C = hand_out.shape
+        hand_loss = F.cross_entropy(
+            hand_out.reshape(B * S, C),
+            hand_target.reshape(B * S),
+            weight=hand_class_weight,
+        )
+    elif hand_mode == "regression":
+        hand_loss = F.smooth_l1_loss(hand_out, hand_target.float(), beta=smooth_l1_beta)
+    else:
+        raise ValueError(f"unknown hand_mode: {hand_mode!r}")
     total = board_loss + hand_weight * hand_loss
     return total, board_loss, hand_loss
 
 
 def compute_metrics(
     board_logits: torch.Tensor,
-    hand_logits: torch.Tensor,
+    hand_out: torch.Tensor,
     board_target: torch.Tensor,
     hand_target: torch.Tensor,
+    hand_pred: torch.Tensor,     # (B, 14) discrete counts from model.predict_hand
 ) -> dict[str, float]:
     with torch.no_grad():
         board_pred = board_logits.argmax(dim=1)  # (B, 9, 9)
@@ -77,7 +85,6 @@ def compute_metrics(
         # Fraction of images where all 81 cells are correct
         board_full = (board_pred == board_target).all(dim=(1, 2)).float().mean().item()
 
-        hand_pred = hand_logits.argmax(dim=-1)  # (B, 14)
         hand_slot_acc = (hand_pred == hand_target).float().mean().item()
         hand_full = (hand_pred == hand_target).all(dim=1).float().mean().item()
 
@@ -175,11 +182,13 @@ def run(args: argparse.Namespace) -> None:
         num_workers=args.num_workers, pin_memory=(device == "cuda"),
     )
 
-    model = BoardOCR(backbone=args.backbone, pretrained=args.pretrained).to(device)
+    model = BoardOCR(
+        backbone=args.backbone, hand_mode=args.hand_mode, pretrained=args.pretrained,
+    ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"[board_ocr] {args.backbone} params={n_params:,}")
+    print(f"[board_ocr] {args.backbone} hand_mode={args.hand_mode} params={n_params:,}")
 
-    if args.hand_class_weight:
+    if args.hand_mode == "classification" and args.hand_class_weight:
         # ConcatDataset doesn't expose .entries directly — merge from children.
         if isinstance(train_ds, ConcatDataset):
             all_entries = [e for ds in train_ds.datasets for e in ds.entries]
@@ -197,6 +206,8 @@ def run(args: argparse.Namespace) -> None:
         )
     else:
         hand_class_weight = None
+        if args.hand_mode == "regression" and args.hand_class_weight:
+            print("[board_ocr] --hand-class-weight ignored under hand-mode=regression.")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
 
@@ -208,6 +219,12 @@ def run(args: argparse.Namespace) -> None:
         ckpt_path = args.ckpt_dir / "latest.pt" if str(args.resume) == "latest" else args.resume
         print(f"[board_ocr] resume from {ckpt_path}")
         ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        ckpt_hand_mode = ckpt.get("hand_mode", "classification")
+        if ckpt_hand_mode != args.hand_mode:
+            raise SystemExit(
+                f"[board_ocr] hand_mode mismatch: ckpt is {ckpt_hand_mode!r} but "
+                f"--hand-mode={args.hand_mode!r}. Head shapes differ; resume aborted."
+            )
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
         start_epoch = ckpt["epoch"] + 1
@@ -237,6 +254,8 @@ def run(args: argparse.Namespace) -> None:
             "epochs": args.epochs,
             "start_epoch": start_epoch,
             "resumed_from": resumed_from,
+            "hand_mode": args.hand_mode,
+            "smooth_l1_beta": args.smooth_l1_beta,
             "hand_weight": args.hand_weight,
             "hand_class_weight": args.hand_class_weight,
             "class_weight_clip_min": args.class_weight_clip_min,
@@ -262,11 +281,13 @@ def run(args: argparse.Namespace) -> None:
             img = img.to(device)
             board = board.to(device)
             hand = hand.to(device)
-            board_logits, hand_logits = model(img)
+            board_logits, hand_out = model(img)
             total, bl, hl = compute_loss(
-                board_logits, hand_logits, board, hand,
+                board_logits, hand_out, board, hand,
+                hand_mode=args.hand_mode,
                 hand_weight=args.hand_weight,
                 hand_class_weight=hand_class_weight,
+                smooth_l1_beta=args.smooth_l1_beta,
             )
             optimizer.zero_grad()
             total.backward()
@@ -274,7 +295,8 @@ def run(args: argparse.Namespace) -> None:
             running_loss += total.item()
             running_board_loss += bl.item()
             running_hand_loss += hl.item()
-            m = compute_metrics(board_logits, hand_logits, board, hand)
+            hand_pred = model.predict_hand(hand_out)
+            m = compute_metrics(board_logits, hand_out, board, hand, hand_pred)
             for k, v in m.items():
                 running_metrics[k] += v
             n_batches += 1
@@ -310,7 +332,8 @@ def run(args: argparse.Namespace) -> None:
                     board = board.to(device)
                     hand = hand.to(device)
                     bl_out, hl_out = model(img)
-                    m = compute_metrics(bl_out, hl_out, board, hand)
+                    hand_pred = model.predict_hand(hl_out)
+                    m = compute_metrics(bl_out, hl_out, board, hand, hand_pred)
                     for k, v in m.items():
                         val_metrics[k] += v
                     n_val_batches += 1
@@ -330,6 +353,7 @@ def run(args: argparse.Namespace) -> None:
             "model": model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "backbone": args.backbone,
+            "hand_mode": args.hand_mode,
             "image_size": args.image_size,
             "hand_weight": args.hand_weight,
             "wandb_run_id": wandb_run.id if wandb_run is not None else None,

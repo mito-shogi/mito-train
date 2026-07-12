@@ -6,9 +6,11 @@ hand_classifier). Does not require corner labels for the board; only sfen is use
 The backbone is swappable. For smoke runs use MobileNetV3-small (~2M) for speed;
 for real training swap in ConvNeXt-Tiny (~28M).
 
-Outputs:
+Outputs (hand_mode dependent):
     board_logits: (B, 29, 9, 9)  per-cell 29-class logits
-    hand_logits:  (B, 14, 19)    per hand-slot 19-class logits (0..18 pieces)
+    hand_out:
+      - hand_mode="classification" (default) : (B, 14, 19) per hand-slot 19-class logits
+      - hand_mode="regression"                : (B, 14) raw scalar counts (round + clamp at inference)
 """
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ import torch
 import torch.nn as nn
 
 BackboneName = Literal["mobilenet_v3_small", "convnext_tiny"]
+HandMode = Literal["classification", "regression"]
 
 # Theoretical max count per hand slot (sente P,L,N,S,G,B,R then gote same order).
 # Pawn = 18, minor pieces = 4, bishop/rook = 2.
@@ -43,7 +46,14 @@ def _build_backbone(name: BackboneName, pretrained: bool) -> tuple[nn.Module, in
 
 
 class BoardOCR(nn.Module):
-    """Two-head model: capture image -> (board grid logits, hand slot logits)."""
+    """Two-head model: capture image -> (board grid logits, hand slot counts).
+
+    The hand head has two modes:
+    - "classification" (default): 14 x 19 logits; CE loss, argmax at inference.
+    - "regression": 14 scalars; SmoothL1 loss, `round + clamp(0, piece_max_per_slot)` at
+      inference. Motivated by TRAINING_PLAN §A — the classification head treats
+      "5 vs 6" and "5 vs 18" equally, discarding ordinal info between counts.
+    """
 
     def __init__(
         self,
@@ -51,6 +61,7 @@ class BoardOCR(nn.Module):
         num_board_classes: int = 29,
         hand_slots: int = 14,
         hand_max: int = 19,
+        hand_mode: HandMode = "classification",
         pretrained: bool = True,
     ) -> None:
         super().__init__()
@@ -59,35 +70,66 @@ class BoardOCR(nn.Module):
         self.num_board_classes = num_board_classes
         self.hand_slots = hand_slots
         self.hand_max = hand_max
+        self.hand_mode: HandMode = hand_mode
 
         # board head: AdaptivePool feature map to 9x9 -> 1x1 conv to 29 channels
         self.board_head = nn.Sequential(
             nn.AdaptiveAvgPool2d((9, 9)),
             nn.Conv2d(feat_dim, num_board_classes, kernel_size=1),
         )
-        # hand head: global pool -> Linear to 14*19 -> reshape
         self.hand_pool = nn.AdaptiveAvgPool2d(1)
-        self.hand_head = nn.Linear(feat_dim, hand_slots * hand_max)
 
-        # Physically impossible slot/count combinations get -inf added to their
-        # logit so both training softmax and inference argmax ignore them.
-        # Shape (1, hand_slots, hand_max) for broadcast over batch.
         if len(PIECE_MAX_PER_SLOT) != hand_slots:
             raise ValueError(
                 f"PIECE_MAX_PER_SLOT length {len(PIECE_MAX_PER_SLOT)} != hand_slots {hand_slots}"
             )
-        mask = torch.zeros(1, hand_slots, hand_max)
-        for slot_idx, piece_max in enumerate(PIECE_MAX_PER_SLOT):
-            if piece_max + 1 < hand_max:
-                mask[0, slot_idx, piece_max + 1 :] = float("-inf")
-        self.register_buffer("hand_logit_mask", mask, persistent=False)
+
+        # Per-slot theoretical max, exposed for the training loop / inference to
+        # clamp regression predictions and for downstream code to introspect.
+        self.register_buffer(
+            "piece_max_per_slot",
+            torch.tensor(PIECE_MAX_PER_SLOT, dtype=torch.long),
+            persistent=False,
+        )
+
+        if hand_mode == "classification":
+            # global pool -> Linear to 14*19 -> reshape
+            self.hand_head = nn.Linear(feat_dim, hand_slots * hand_max)
+            # Physically impossible slot/count combinations get -inf added to their
+            # logit so both training softmax and inference argmax ignore them.
+            mask = torch.zeros(1, hand_slots, hand_max)
+            for slot_idx, piece_max in enumerate(PIECE_MAX_PER_SLOT):
+                if piece_max + 1 < hand_max:
+                    mask[0, slot_idx, piece_max + 1 :] = float("-inf")
+            self.register_buffer("hand_logit_mask", mask, persistent=False)
+        elif hand_mode == "regression":
+            # global pool -> Linear to 14 raw scalars
+            self.hand_head = nn.Linear(feat_dim, hand_slots)
+        else:
+            raise ValueError(f"unknown hand_mode: {hand_mode!r}")
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         feat = self.features(x)  # (B, feat_dim, H', W')
         board_logits = self.board_head(feat)  # (B, 29, 9, 9)
         hand_feat = self.hand_pool(feat).flatten(1)  # (B, feat_dim)
-        hand_logits = self.hand_head(hand_feat).view(
-            -1, self.hand_slots, self.hand_max
-        )  # (B, 14, 19)
-        hand_logits = hand_logits + self.hand_logit_mask
-        return board_logits, hand_logits
+        if self.hand_mode == "classification":
+            hand_out = self.hand_head(hand_feat).view(
+                -1, self.hand_slots, self.hand_max
+            )  # (B, 14, 19)
+            hand_out = hand_out + self.hand_logit_mask
+        else:  # regression
+            hand_out = self.hand_head(hand_feat)  # (B, 14)
+        return board_logits, hand_out
+
+    def predict_hand(self, hand_out: torch.Tensor) -> torch.Tensor:
+        """Convert raw head output to discrete count predictions (B, hand_slots) long.
+
+        - classification: argmax over the 19 count classes.
+        - regression: round + clamp to per-slot theoretical max.
+        """
+        if self.hand_mode == "classification":
+            return hand_out.argmax(dim=-1)
+        # regression
+        rounded = hand_out.round()
+        max_per_slot = self.piece_max_per_slot.to(rounded.device).unsqueeze(0)  # (1, 14)
+        return rounded.clamp(min=0).minimum(max_per_slot.expand_as(rounded)).long()
