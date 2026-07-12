@@ -7,7 +7,7 @@ board_ocr の学習を回しながら気づいた改善候補と、次のイテ�
 
 前回 20 エポック → 追加 40 エポック（`RESUME=latest EPOCHS=60`）で継続学習中。
 
-分布可視化ツール：`scripts/analyze_hand_distribution.py`（出力: `runs/hand-distribution.png`）
+分布可視化ツール：`scripts/inspect/analyze_hand_distribution.py`（出力: `runs/hand-distribution.png`）
 
 | epoch | loss | board_loss | hand_loss | cell_acc | sfen_acc |
 |------:|-----:|-----------:|----------:|---------:|---------:|
@@ -48,7 +48,7 @@ epoch 20 時点の val 側：
 
 ### B. データ分布の偏り対応（優先度：高）
 
-**観測**（`scripts/analyze_hand_distribution.py`、`data/train.jsonl` n=27,000 局面 = 378,000 スロットラベル）：
+**観測**（`scripts/inspect/analyze_hand_distribution.py`、`data/train.jsonl` n=27,000 局面 = 378,000 スロットラベル）：
 
 - ラベル `0`（=空スロット）が **55.94%**。`1` が 26.09%、`2` が 8.65%、以降 3%以下まで急落。
 - モデルが常に「0」と答えても素の accuracy が 56% 出せる構造。

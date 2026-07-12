@@ -4,9 +4,7 @@
 **版**: v1.0
 **適用範囲**: MITO (推論・UI) と mito-train (学習・ONNX 出力) の間の **唯一の契約**
 **関連文書**:
-- `docs/ocr-phase2-plan.md` — Phase 2/3 全体計画
 - `docs/ocr-metrics.md` — 精度指標
-- `docs/piyo-data-generation-spec.md` — 教師データ生成仕様
 
 ---
 

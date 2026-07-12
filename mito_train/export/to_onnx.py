@@ -7,14 +7,15 @@ Contract: input/output names and shapes must match docs/ocr-model-interface.md e
 CI runs contract validation via onnxruntime (see README section 8).
 """
 from __future__ import annotations
+
 import argparse
 from pathlib import Path
 
 import torch
 
-from mito_train.models.piece_classifier import PieceClassifier
 from mito_train.models.board_detector import BoardDetector
 from mito_train.models.hand_classifier import HandClassifier
+from mito_train.models.piece_classifier import PieceClassifier
 
 # Per-model tuple: (constructor, dummy input shape, input name, output name)
 MODEL_SPECS = {

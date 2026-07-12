@@ -6,10 +6,9 @@ Usage:
 TODO: implement the multi-head training loop once hand labels are ready.
 """
 from __future__ import annotations
+
 import argparse
 from pathlib import Path
-
-import torch
 
 from mito_train.models.hand_classifier import HandClassifier
 from mito_train.training.train_piece import get_device
@@ -20,7 +19,7 @@ def main() -> None:
     p.add_argument("--data", type=Path, default=Path("./data/piyo-train"))
     p.add_argument("--epochs", type=int, default=5)
     p.add_argument("--out", type=Path, default=Path("./runs/hand-classifier"))
-    args = p.parse_args()
+    p.parse_args()
 
     device = get_device()
     model = HandClassifier().to(device)
