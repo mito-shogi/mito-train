@@ -91,10 +91,44 @@ val は 2 epoch おき測定なので、代表点として ep10 / 20 / 30 / 40 /
 sfen_full が上記予想値で頭打ちする理由：
 
 1. **cell_acc が既に 0.99 台に張り付いている**。ここから 1pt 押し上げても sfen_full にはあまり効かない（[`ocr-metrics.md` の Q1 表](./ocr-metrics.md)、および [`backbones.md` の cell_acc→sfen_full 表](./backbones.md#cell_acc-と-sfen_full-の関係重要)）。
-2. **hand_full_acc がまだ 0.7 前後**（`TRAINING_PLAN.md` v1 観測で ep20 時点 0.385）。sfen_full ≈ board_correct × hand_correct なので、hand を伸ばさない限り sfen は上に抜けない。
-3. **持ち駒 count=10 のギャップ**（`TRAINING_PLAN.md` の「歩は要注意」参照）。歩スロットで count=10 の logit が完全ゼロ学習の状態が残っている限り、実局面で毎回落ちる分の上限がある。
+2. **hand_full_acc がまだ 0.7 前後**。sfen_full ≈ board_correct × hand_correct なので、hand を伸ばさない限り sfen は上に抜けない。詳細は下記「hand の失敗パターン」を参照。
 
 つまり **エポックを 2 倍に伸ばしても sfen_full の到達値は +3〜5pt**。実用ライン 90% には遠く、エポック単体の追加投資では届かない。
+
+## hand の失敗パターン
+
+hand head は構造上 **駒の種類を間違えない**（`mito_train/models/board_ocr.py` の `hand_head` は 14 スロット固定で、スロット index が piece × side をエンコード）。だから「hand の間違い = 枚数の間違い」だけ。
+
+残っている失敗パターンは以下の 2 つ：
+
+### 1. 枚数の隣接ミス（本命）
+
+`hand_logits: (B, 14, 19)` の 19-way CrossEntropy を使っているため、**「5 vs 6」の間違いも「5 vs 18」の間違いも同じ loss**。序数情報を完全に捨てている。argmax が隣接クラスで揺れやすいのはこの構造由来。sfen 落ちの支配的要因のはず。
+
+対策は `TRAINING_PLAN.md#A` の **regression head**（SmoothL1、推論時 round+clamp）。
+
+### 2. 0 バイアス（分布の偏り）
+
+学習データの分布が極端に 0 に寄っている（`scripts/inspect/analyze_hand_distribution.py` の出力を参照）：
+
+- ラベル 0（空スロット）が過半
+- 飛スロットは 0/1 でほぼ完結（非ゼロ率 19〜20%）
+- 高枚数（3〜9）は希少で、under-count しやすい
+
+対症療法として v2 で `class weight sqrt+clip` を導入済み（`TRAINING_PLAN.md#B`）。ただし本丸は上記 1 の regression 化なので、これだけでは頭打ち。
+
+### 解消済みの構造欠陥（参考）
+
+以前は歩スロットで **count=10 が学習データに 1 件も無い** ギャップがあり（piyo-hook 側の SFEN 出力バグ由来）、歩 10 枚を毎回 8/9/11 に誤読していた。現在は `ultemica/piyoshogi` の最新スナップショットで歩 count=10 局面が収録済みで、この構造欠陥は解消されている。分布としては依然として裾で希少なので、対策 2（class weight）の対象には残っている。
+
+### 診断コマンド
+
+「どのスロットで、どの枚数を、何枚に間違えたか」を数字で出す：
+
+- `scripts/inspect/diagnose_hand.py` — val 全体で per-slot accuracy + true count → pred count の confusion matrix
+- `scripts/inspect/analyze_hand_failures.py` — 端末別（iPhone XR / iPhone 15 等）で mismatch 局面をダンプ
+
+sweep 直後の checkpoint に対して回せば、隣接ミス / 0 バイアスのどちらが支配的か切り分けられる。
 
 ## 画像サイズを大きくしたときの見込み
 
@@ -142,14 +176,14 @@ epoch 50 相当で回したときの val sfen_full の見込みレンジ：
 sweep 結果から見えるコスパ順位（1 sample あたりの学習 wall-clock 増加を考慮）：
 
 1. **image_size 224 → 288**（コスト ~1.65倍、期待 +5〜10pt）
-2. **image_size 288 → 384**（コスト ~1.78倍、期待 +5〜10pt）
-3. **hand head の regression 化 + class weight 継続**（コスト実装のみ、期待 +3〜5pt）
+2. **hand head の regression 化 + class weight 継続**（コスト実装のみ、期待 +3〜5pt）
+3. **image_size 288 → 384**（コスト ~1.78倍、期待 +5〜10pt）
 4. **cosine LR + epoch 100 まで延長**（コスト 2倍、期待 +2〜3pt）
 5. **backbone を 1〜2 段上げる**（コストは backbone 依存、期待 +2〜5pt）
 
 **エポック単独増は 4 番目**。sweep の各 backbone の後半勾配を見る限り、`convnext_atto` `convnext_pico` は既に飽和気味で、100 epoch まで回しても sfen +2pt がせいぜい。
 
-一方 **画像サイズ増は 1〜2 位で、これを先に済ませないと後段の投資が全部 5割引き** になる（cell_acc の 1pt が sfen に効くレート差が違う）。
+一方 **画像サイズ増と hand head 改修が上位で、これを先に済ませないと後段の投資が全部 5割引き** になる。hand が枚数の隣接ミスで落ちている限り、cell_acc を上げても sfen_full には抜けない。
 
 ## 90% ライン到達までの推奨経路
 
@@ -178,14 +212,14 @@ convnext_tiny × 384 × distill → 0.88〜0.92 (実用ライン到達)
 
 sweep 結果を踏まえた次のイテレーション優先順位：
 
-1. **convnext_nano の再学習**（今回未完走）。tiny の 15MB 版として実運用第一候補。
-2. **image_size=288 での再 sweep**。まずは mobilenet_v3_small / convnext_atto / convnext_tiny の 3 点で効果測定。
-3. **cosine annealing の導入**（`TRAINING_PLAN.md#D`）。resume 対応と同時に。
-4. **hand head の regression 化**（`TRAINING_PLAN.md#A`）。cell_acc は据置きで sfen_full が跳ねる可能性大。
+1. **hand head の regression 化**（`TRAINING_PLAN.md#A`）。cell_acc は据置きで sfen_full が跳ねる可能性大。実装コスト最小、まず切って効果測定。
+2. **convnext_nano の再学習**（今回未完走）。tiny の 15MB 版として実運用第一候補。
+3. **image_size=288 での再 sweep**。まずは mobilenet_v3_small / convnext_atto / convnext_tiny の 3 点で効果測定。
+4. **cosine annealing の導入**（`TRAINING_PLAN.md#D`）。resume 対応と同時に。
 5. **image_size=384 は convnext_atto / tiny のみ、蒸留と一緒に**。VRAM とのトレードで動く backbone だけ選ぶ。
-6. **持ち駒 count=10 のギャップ埋め**（`TRAINING_PLAN.md#歩は要注意`）。歩スロットの合成データを短期で追加。
+6. **hand 分布の再集計**（`scripts/inspect/analyze_hand_distribution.py`）。歩 count=10 収録後の最新分布を確認し、class weight の clip 値を再調整するか判断する。
 
-「エポック増だけで頑張る」路線は **ROI が悪い**。sweep の後半勾配は既に落ちている。次の投資は **解像度 + hand head + scheduler の三点セット**、そこに convnext_tiny を据えるのが最短。
+「エポック増だけで頑張る」路線は **ROI が悪い**。sweep の後半勾配は既に落ちている。次の投資は **hand head + 解像度 + scheduler の三点セット**、そこに convnext_tiny を据えるのが最短。
 
 ## 再現用コマンド
 
