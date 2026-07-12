@@ -22,8 +22,9 @@ BoardOCR がサポートする 9 個のバックボーンを、パラメータ�
 
 | 配信先 | 推奨 backbone | 理由 |
 |---|---|---|
-| Cloudflare Workers（自前推論） | mobilenet_v3_small | CPU/メモリ制約が厳しい、最軽量必須 |
-| Cloudflare Workers AI（ホスト済み） | 該当なし | ONNX 独自モデルは動かせない、Workers AI カタログ限定 |
+| Cloudflare Workers + workers-wonnx (WebGPU) | mobilenet_v3_small〜convnext_atto | R2 にモデル置いて WebGPU 経由。CPU 推論より現実的 |
+| Cloudflare Workers 純 CPU 推論 | mobilenet_v3_small (int8) | GPU 無しで実用ラインギリ、Paid tier 必須 |
+| Cloudflare Workers AI（ホスト済み） | 該当なし（現状） | カタログ限定、BYOM は 2026 半ば時点で未 GA |
 | ブラウザ（初回DL重視） | mobilenet_v3_small / large, convnext_atto | int8 で数MB、初回ロード軽い |
 | ブラウザ（精度重視） | convnext_nano | int8 15MB、精度/サイズのバランス最良 |
 | 2024+ フラグシップスマホ | convnext_tiny | NPU性能余裕、精度上限狙える |
@@ -128,34 +129,52 @@ BoardOCR がサポートする 9 個のバックボーンを、パラメータ�
 
 ### Cloudflare Workers（自前ONNXモデル推論）
 
-Workers 上で ONNX Runtime Web / WASM を使って BoardOCR を動かす場合。
+2026年時点、Cloudflareで自前 ONNX を動かす選択肢は3つ。それぞれ制約が違うので使い分けが必要〜。
 
-**制約**
-- **CPU 時間**: Free 10ms / Paid 30秒 (bundled), 5分 (unbound) — CPU 束縛推論には非常にきつい
-- **メモリ**: 128MB — 大きなモデル + アクティベーションで足りない
-- **GPU 無し**: 全て CPU で完結
-- **モデルサイズ**: KV Worker から fetch する形なら数十MB可、埋め込むなら 1MB 制限
+#### ルート A: `workers-wonnx` パターン（推奨）
 
-**推奨**
-- **mobilenet_v3_small** 一択、int8 量子化必須（fp32 で 4.4MB でギリ、int8 で 1MB 台）
-- efficientnet_b0 も検討余地あるが SE ブロックの計算が重く CPU 時間食う
+公式サンプル [`cloudflare/workers-wonnx`](https://github.com/cloudflare/workers-wonnx) が示す方法。WebGPU ベースの ONNX ランタイム WONNX を Worker 上で動かし、モデル本体は R2 バケットから fetch する。
 
-**推論時間の見積もり**（Worker CPU で 224x224 1枚推論）
-- mobilenet_v3_small int8: **~200〜400ms** — Paid tier ならぎりぎり
-- efficientnet_b0 int8: **~500ms〜1s** — 苦しい
-- convnext_atto: **~800ms〜2s** — Unbound Worker のみ
+- **GPU 使えるので推論はそこそこ速い**（WebGPU 経由）
+- **モデルサイズ制約回避**: R2 に置くから Worker のバンドルサイズ制限に縛られない
+- **BoardOCR の場合の実用度**: convnext_tiny クラスは重すぎるので、**mobilenet_v3_small〜convnext_atto が現実的**
+- 推論時間目安: mobilenet_v3_small int8 で **20〜50ms**、convnext_atto で **80〜200ms**（WebGPU 経由）
 
-**注意**
-- Worker 実行時間はリクエスト毎の課金対象。1秒超えると Bundled は超過エラー
-- 実用性は微妙。**Workers AI か R2 経由の別実行環境（Container / Runtime）を推奨**
+#### ルート B: Workers AI カタログ（該当モデル無し）
 
-### Cloudflare Workers AI（ホスト済みモデル）
+Cloudflare 側で GPU 実行してくれる仕組み。ただし利用可能モデルはカタログ限定で、**カスタム ONNX は現状 GA していない**（BYOM がロードマップにはいるがまだ未提供、2026年半ば時点）。
 
-Cloudflare 側で GPU 実行してくれる仕組み。ただし利用可能モデルはカタログ限定。
+- カタログにあるのは Llama, Whisper, Stable Diffusion 系
+- **将棋盤 OCR 用途は該当なし** → 使えない
+- 将来 BYOM 対応したら convnext_tiny クラスまで載る想定
 
-- **カスタム ONNX 不可**: BoardOCR を自前で載せることはできない
-- カタログにあるモデル（Llama, Whisper, StableDiffusion 系）とは用途が違うので直接使えない
-- **将来の可能性**: Workers AI が任意モデルホスティングに対応した際に convnext_tiny クラスまで載る想定
+過去に「Constellation」というカスタム ONNX 実行サービスがあったが、Workers AI に統合され独立プロダクトとしては終息。
+
+#### ルート C: Worker CPU 上で ONNX Runtime Web / WASM
+
+昔ながらの方法。**GPU 使えないので実用性はかなり厳しい**。
+
+- **CPU 時間**: Free 10ms（推論不可）/ Paid tier で 30秒 (bundled) / 5分 (unbound)
+- **メモリ**: 128MB
+- **推論時間の見積もり**（Worker CPU で 224x224 1枚推論）
+  - mobilenet_v3_small int8: **200〜400ms** — Paid tier ならぎりぎり
+  - efficientnet_b0 int8: **500ms〜1s** — 苦しい
+  - convnext_atto 以上: **1s超** — Unbound のみ実用
+
+### Workers 料金の目安（2026年時点）
+
+- **Workers Paid**: 月$5、10M req + 30M CPU-ms 込み
+- 超過分: 1M req あたり$0.30、1M CPU-ms あたり$0.02
+- **Workers AI**: 1,000 Neurons あたり$0.011（無料枠1日10,000 Neurons）
+  - Neurons = リクエスト実行に必要な GPU コンピュートの単位
+  - カスタム ONNX（`workers-wonnx`）は Workers AI ではなく Workers 側の課金体系
+- **R2 ストレージ**: モデルファイル置き場、10GB/月まで無料、以降 $0.015/GB/月
+
+**BoardOCR のケーススタディ**
+- mobilenet_v3_small int8 (1.1MB) を R2 に置いて workers-wonnx で提供
+- 1回の推論: ~30ms CPU + R2 fetch（キャッシュ効くから初回のみ）
+- 1M リクエスト/月 想定: Worker Paid $5 + CPU 超過分ほぼゼロ = **~$5/月で運用可能**
+- ただし GPU コンピュート単価は今後変動可能性あり、公式ドキュメント要確認
 
 ### 2024年以降のスマートフォン
 
@@ -228,20 +247,21 @@ Cloudflare 側で GPU 実行してくれる仕組み。ただし利用可能モ�
 
 224x224 入力・1画像あたりの推論時間の**目安**。数値は他モデルの公開ベンチと BoardOCR のパラメータ規模から推定した見積もりで、実測値ではない。
 
-| Backbone | Cloudflare Worker (CPU) | iPhone 15/16 Pro (NE) | Snapdragon 8 Gen 3 (NPU) | Pixel 9 (TPU int8) | ミッドレンジ Android 2024 |
-|---|---|---|---|---|---|
-| mobilenet_v3_small | **200〜400ms** | 3〜8ms | 5〜10ms | 5〜10ms | 15〜30ms |
-| mobilenet_v3_large | 400〜800ms | 5〜12ms | 8〜15ms | 8〜15ms | 25〜50ms |
-| convnext_atto | 800ms〜2s | 6〜12ms | 10〜18ms | 10〜18ms | 30〜60ms |
-| efficientnet_b0 | 500ms〜1s | 5〜10ms | 8〜15ms | 8〜15ms | 20〜40ms |
-| convnext_femto | 1〜3s | 8〜15ms | 12〜20ms | 12〜20ms | 40〜80ms |
-| efficientnet_b1 | 800ms〜1.5s | 8〜15ms | 12〜20ms | 12〜20ms | 30〜60ms |
-| convnext_pico | 2〜5s | 10〜18ms | 15〜25ms | 15〜25ms | 60〜120ms |
-| convnext_nano | 5〜10s | 10〜20ms | 15〜25ms | 15〜30ms | 40〜80ms |
-| convnext_tiny | 10〜30s | 15〜30ms | 20〜40ms | 30〜50ms | 80〜150ms |
+| Backbone | Worker CPU 推論 | Worker + workers-wonnx (WebGPU) | iPhone 15/16 Pro (NE) | Snapdragon 8 Gen 3 (NPU) | Pixel 9 (TPU int8) | ミッドレンジ Android 2024 |
+|---|---|---|---|---|---|---|
+| mobilenet_v3_small | **200〜400ms** | 20〜50ms | 3〜8ms | 5〜10ms | 5〜10ms | 15〜30ms |
+| mobilenet_v3_large | 400〜800ms | 40〜100ms | 5〜12ms | 8〜15ms | 8〜15ms | 25〜50ms |
+| convnext_atto | 800ms〜2s | 80〜200ms | 6〜12ms | 10〜18ms | 10〜18ms | 30〜60ms |
+| efficientnet_b0 | 500ms〜1s | 50〜120ms | 5〜10ms | 8〜15ms | 8〜15ms | 20〜40ms |
+| convnext_femto | 1〜3s | 100〜250ms | 8〜15ms | 12〜20ms | 12〜20ms | 40〜80ms |
+| efficientnet_b1 | 800ms〜1.5s | 80〜180ms | 8〜15ms | 12〜20ms | 12〜20ms | 30〜60ms |
+| convnext_pico | 2〜5s | 200〜500ms | 10〜18ms | 15〜25ms | 15〜25ms | 60〜120ms |
+| convnext_nano | 5〜10s | 400ms〜1s | 10〜20ms | 15〜25ms | 15〜30ms | 40〜80ms |
+| convnext_tiny | 10〜30s | 800ms〜2s | 15〜30ms | 20〜40ms | 30〜50ms | 80〜150ms |
 
 **読み取りポイント**
-- **Cloudflare Worker**: convnext_atto より重いモデルはリクエスト毎の CPU 時間制約でほぼ実用不可
+- **Worker CPU 推論**: convnext_atto より重いモデルはリクエスト毎の CPU 時間制約でほぼ実用不可
+- **workers-wonnx (WebGPU)**: CPU 推論の 10〜20倍速。convnext_atto までは実用範囲
 - **モバイル NPU/TPU 経由**: convnext_tiny でも 30〜50ms、体感 60fps は無理でも 15〜20fps は出る
 - **ミッドレンジスマホでのラインは convnext_nano**: tiny だと 100ms 超で操作もっさり
 - サーバ GPU 推論なら全 backbone が数ms〜十数ms で完結（比較対象外だが参考として）
