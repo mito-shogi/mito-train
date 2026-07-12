@@ -18,6 +18,7 @@ First call downloads the parquet shards into `~/.cache/huggingface/datasets/`.
 Subsequent runs are cache-hits.
 """
 from __future__ import annotations
+import fcntl
 import os
 import random
 from concurrent.futures import ThreadPoolExecutor
@@ -172,13 +173,18 @@ class HFCaptureDataset(Dataset):
 
         DDP: only rank 0 builds. Other ranks wait on a barrier and mmap the same
         file, sharing the kernel page cache instead of duplicating the array.
+
+        PARALLEL_GPU sweeps: many independent Python processes may race on the
+        same cache path. An fcntl advisory lock on a sibling .lock file
+        serializes them cross-process — the first process builds, the rest wait
+        on the lock and then find the cache already there.
         """
         from mito_train.training.dist_utils import barrier, is_main
 
         path = self._cache_path(cache_dir, repo_id, config_name, split, image_size)
 
-        if not path.exists() and is_main():
-            self._build_and_save_cache(path, image_size, workers)
+        if is_main():
+            self._maybe_build_with_lock(path, image_size, workers)
 
         # All ranks meet here: rank 0 has finished writing, others were idle.
         barrier()
@@ -188,6 +194,31 @@ class HFCaptureDataset(Dataset):
         if is_main():
             print(f"[HFCaptureDataset] preload cache ready: {path} ({gb:.2f} GB, mmap)")
         self._cache = arr
+
+    def _maybe_build_with_lock(
+        self, path: Path, image_size: int, workers: int,
+    ) -> None:
+        """Cross-process safe cache-or-build.
+
+        Fast path: file exists -> return immediately without touching the lock.
+        Slow path: take an exclusive fcntl lock on a sibling .lock file, then
+        re-check under lock (another process may have built while we waited)
+        before doing the actual decode + save.
+        """
+        if path.exists():
+            return
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = path.with_name(path.name + ".lock")
+
+        with open(lock_path, "w") as lockf:
+            print(f"[HFCaptureDataset] acquiring build lock: {lock_path}")
+            fcntl.flock(lockf.fileno(), fcntl.LOCK_EX)
+            # Re-check: while we were blocked, another process may have finished.
+            if path.exists():
+                print("[HFCaptureDataset] cache built by another process while waiting; skipping")
+                return
+            self._build_and_save_cache(path, image_size, workers)
 
     def _build_and_save_cache(
         self, path: Path, image_size: int, workers: int,
