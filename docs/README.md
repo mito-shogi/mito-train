@@ -1,9 +1,21 @@
 # docs/
 
-MITO 側から同期する仕様書を置く場所 (Git 管理対象)。
+MITO ↔ mito-train 契約と mito-train 固有ドキュメント。
 
-- `ocr-model-interface.md` — MITO ↔ mito-train のモデル契約 (input/output 名・shape・dtype)
-- `piyo-data-generation-spec.md` — piyo-hook 向けデータ生成仕様 (Twitter 劣化再現の基準)
+## MITO ↔ mito-train 契約
+
+- `ocr-model-interface.md` — モデル契約 (input/output 名・shape・dtype)
 - `ocr-metrics.md` — 評価指標の定義 (piece accuracy / IoU / exact-match)
 
-これらは MITO レポからコピーしてくる。まだ未同期。
+## mito-train 固有
+
+- `piyo-piece-templates.md` — 駒テンプレの命名規則 (14 デザイン × 30 駒)
+
+## データセットの正規
+
+学習/評価データは Hugging Face Hub に集約：
+
+- [ultemica/piyoshogi](https://huggingface.co/datasets/ultemica/piyoshogi) — 学習/検証 (paired 形式、`ocr_paired` / `detector_paired` config)
+- [ultemica/piyoshogi-eval](https://huggingface.co/datasets/ultemica/piyoshogi-eval) — leak-free eval (paired 形式、1,000 SFEN × 4機種)
+
+各リポの README に schema・行数・使い方が記載されている。

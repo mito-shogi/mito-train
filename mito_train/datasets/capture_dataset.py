@@ -1,7 +1,7 @@
 """Dataset of piyo-shogi captures (board + hand, 1 image) paired with sfen labels.
 
 Each line of the manifest jsonl is {"hash": ..., "sfen": ...}. Actual images are
-expected to be flat-laid out under `data/captures/{subdir}/{hash}.png`.
+expected to be flat-laid out under `data/ocr/{device}/{hash}.webp`.
 
 `__getitem__` returns (image_tensor, board_tensor, hand_tensor):
 - image_tensor: (3, H, W) float32, normalized
@@ -99,7 +99,7 @@ class CaptureDataset(Dataset):
         Parameters
         ----------
         manifest_path: path to train.jsonl / val.jsonl
-        image_root:    directory holding the images (e.g. data/captures/d0)
+        image_root:    directory holding the images (e.g. data/ocr/iPhone10,1)
         transform:     Albumentations Compose or callable. When None, defaults to val transform.
         limit:         use only the first N entries (for smoke tests)
         """
@@ -123,7 +123,10 @@ class CaptureDataset(Dataset):
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         entry = self.entries[idx]
         h = entry["hash"]
-        image_path = self.image_root / f"{h}.png"
+        # Prefer WebP (lossless, ~35% smaller than PNG); fall back to PNG for
+        # datasets that haven't been converted yet.
+        webp = self.image_root / f"{h}.webp"
+        image_path = webp if webp.exists() else self.image_root / f"{h}.png"
 
         img = Image.open(image_path)
         # RGBA -> RGB (composited on white background)

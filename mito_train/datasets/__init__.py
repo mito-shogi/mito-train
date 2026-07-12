@@ -1,16 +1,21 @@
 from .capture_dataset import CaptureDataset, build_transform
+from .detector_dataset import DetectorDataset, build_detector_transform
 from .pieces_dataset import PiecesDataset
 from .piyo_dataset import PiyoDataset
 
 __all__ = [
     "PiyoDataset", "PiecesDataset", "CaptureDataset", "build_transform",
-    "HFCaptureDataset",
+    "DetectorDataset", "build_detector_transform",
+    "HFCaptureDataset", "HFPairedDataset",
 ]
 
 
 def __getattr__(name):
-    # Lazy import: HFCaptureDataset requires the optional `datasets` package.
+    # Lazy import: HF datasets require the optional `datasets` package.
     if name == "HFCaptureDataset":
         from .hf_capture_dataset import HFCaptureDataset
         return HFCaptureDataset
+    if name == "HFPairedDataset":
+        from .hf_paired_dataset import HFPairedDataset
+        return HFPairedDataset
     raise AttributeError(f"module 'mito_train.datasets' has no attribute {name!r}")

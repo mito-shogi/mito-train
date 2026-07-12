@@ -15,7 +15,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader
 
 from mito_train.datasets import CaptureDataset, build_transform
 from mito_train.datasets.sfen_utils import parse_sfen
@@ -107,31 +107,65 @@ def run(args: argparse.Namespace) -> None:
     limit_val = min(args.limit, 20) if args.mode == "smoke" else None
 
     if args.hf_repo_id:
-        # HF-hosted parquet dataset (embedded PNG bytes). First run downloads
-        # the shards into HF cache (~21GB); subsequent runs are cache-hits.
-        from mito_train.datasets import HFCaptureDataset
-        print(f"[board_ocr] loading from HF repo: {args.hf_repo_id}")
-        train_ds = HFCaptureDataset(
-            repo_id=args.hf_repo_id, split="train",
-            transform=train_tf, limit=limit_train,
-        )
-        val_ds = HFCaptureDataset(
-            repo_id=args.hf_repo_id, split="val",
-            transform=val_tf, limit=limit_val,
-        )
+        # HF-hosted parquet dataset. First run downloads shards into HF cache
+        # (~32GB for ocr_paired); subsequent runs are cache-hits.
+        if args.hf_config.endswith("_paired"):
+            from mito_train.datasets import HFPairedDataset
+            print(f"[board_ocr] loading from HF repo: {args.hf_repo_id} "
+                  f"(config={args.hf_config}, devices={args.hf_devices or 'all'})")
+            train_ds = HFPairedDataset(
+                repo_id=args.hf_repo_id, split="train", config=args.hf_config,
+                transform=train_tf, devices=args.hf_devices or None,
+                limit=limit_train,
+            )
+            val_ds = HFPairedDataset(
+                repo_id=args.hf_repo_id, split="val", config=args.hf_config,
+                transform=val_tf, devices=args.hf_devices or None,
+                limit=limit_val,
+            )
+        else:
+            from mito_train.datasets import HFCaptureDataset
+            print(f"[board_ocr] loading from HF repo: {args.hf_repo_id} (vertical config)")
+            train_ds = HFCaptureDataset(
+                repo_id=args.hf_repo_id, split="train",
+                transform=train_tf, limit=limit_train,
+            )
+            val_ds = HFCaptureDataset(
+                repo_id=args.hf_repo_id, split="val",
+                transform=val_tf, limit=limit_val,
+            )
     else:
-        train_ds = CaptureDataset(
+        # Primary source (backwards compatible with single-device runs).
+        train_datasets = [CaptureDataset(
             manifest_path=args.train_manifest,
             image_root=args.image_root,
             transform=train_tf,
             limit=limit_train,
-        )
-        val_ds = CaptureDataset(
+        )]
+        val_datasets = [CaptureDataset(
             manifest_path=args.val_manifest,
             image_root=args.image_root,
             transform=val_tf,
             limit=limit_val,
-        )
+        )]
+        # Extra sources: "manifest.jsonl:image_dir" pairs. Enables per-device
+        # captures (e.g. iPhone11,8, iPhone15,4 for high-hand augmentation).
+        for src in args.extra_train_source:
+            manifest, root = src.split(":", 1)
+            print(f"[board_ocr]  + extra train: {manifest} <- {root}")
+            train_datasets.append(CaptureDataset(
+                manifest_path=Path(manifest), image_root=Path(root),
+                transform=train_tf, limit=limit_train,
+            ))
+        for src in args.extra_val_source:
+            manifest, root = src.split(":", 1)
+            print(f"[board_ocr]  + extra val:   {manifest} <- {root}")
+            val_datasets.append(CaptureDataset(
+                manifest_path=Path(manifest), image_root=Path(root),
+                transform=val_tf, limit=limit_val,
+            ))
+        train_ds = ConcatDataset(train_datasets) if len(train_datasets) > 1 else train_datasets[0]
+        val_ds = ConcatDataset(val_datasets) if len(val_datasets) > 1 else val_datasets[0]
     print(f"[board_ocr] train={len(train_ds)} val={len(val_ds)}")
 
     train_loader = DataLoader(
@@ -148,8 +182,13 @@ def run(args: argparse.Namespace) -> None:
     print(f"[board_ocr] {args.backbone} params={n_params:,}")
 
     if args.hand_class_weight:
+        # ConcatDataset doesn't expose .entries directly — merge from children.
+        if isinstance(train_ds, ConcatDataset):
+            all_entries = [e for ds in train_ds.datasets for e in ds.entries]
+        else:
+            all_entries = train_ds.entries
         hand_class_weight = compute_hand_class_weights(
-            train_ds.entries,
+            all_entries,
             num_classes=model.hand_max,
             clip_min=args.class_weight_clip_min,
             clip_max=args.class_weight_clip_max,
@@ -320,11 +359,22 @@ def main() -> None:
                    choices=["mobilenet_v3_small", "convnext_tiny"])
     p.add_argument("--pretrained", action="store_true", default=True)
     p.add_argument("--no-pretrained", dest="pretrained", action="store_false")
-    p.add_argument("--train-manifest", type=Path, default=Path("./data/train.jsonl"))
-    p.add_argument("--val-manifest", type=Path, default=Path("./data/val.jsonl"))
-    p.add_argument("--image-root", type=Path, default=Path("./data/captures/d0"))
+    p.add_argument("--train-manifest", type=Path, default=Path("./data/ocr/train.jsonl"))
+    p.add_argument("--val-manifest", type=Path, default=Path("./data/ocr/val.jsonl"))
+    p.add_argument("--image-root", type=Path, default=Path("./data/ocr/iPhone10,1"))
     p.add_argument("--hf-repo-id", type=str, default=None,
                    help="Load from a HF dataset repo (e.g. 'ultemica/piyoshogi') instead of local manifests.")
+    p.add_argument("--hf-config", type=str, default="ocr_paired",
+                   help="HF dataset config name. Use 'ocr_paired' (default, 4 images per SFEN "
+                        "flattened to per-device examples) or a vertical config for the old schema.")
+    p.add_argument("--hf-devices", nargs="+", default=None,
+                   help="Restrict paired dataset to specific device identifiers "
+                        "(e.g. --hf-devices iPhone10,1 iPhone15,4). Default: all 4 devices.")
+    p.add_argument("--extra-train-source", action="append", default=[],
+                   help="'manifest.jsonl:image_dir' pair; repeat for multi-device. "
+                        "Concatenated with the primary --train-manifest source.")
+    p.add_argument("--extra-val-source", action="append", default=[],
+                   help="'manifest.jsonl:image_dir' pair; repeat for multi-device.")
     p.add_argument("--image-size", type=int, default=224)
     p.add_argument("--limit", type=int, default=100)
     p.add_argument("--epochs", type=int, default=10)
