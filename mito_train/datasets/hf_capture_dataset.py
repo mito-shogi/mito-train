@@ -1,8 +1,9 @@
 """HF Hub-backed variant of CaptureDataset.
 
 Loads the dataset from a Hugging Face dataset repo where each row is
-{"image": <PIL image>, "sfen": <str>, "hash": <str>} — same schema uploaded by
-scripts/upload_to_hf.py.
+{"image": <PIL image>, "sfen": <str>, "hash": <str>} — the vertical (1 row per
+image) schema. For the current paired schema (1 row per SFEN, 4 images), use
+HFPairedDataset instead.
 
 Usage (in training):
     from mito_train.datasets import HFCaptureDataset, build_transform
@@ -16,6 +17,7 @@ First call downloads the parquet shards into `~/.cache/huggingface/datasets/`.
 Subsequent runs are cache-hits.
 """
 from __future__ import annotations
+
 from typing import Callable
 
 import albumentations as A

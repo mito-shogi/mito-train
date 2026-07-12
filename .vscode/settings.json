@@ -5,6 +5,17 @@
         "**/__pycache__": true,
         "**/.venv": true,
         "**/.ruff_cache": true,
-        "**/cache": true
-    }
+        "**/cache": true,
+        "**/*.png": true,
+        "**/*.webp": true
+    },
+    "search.exclude": {
+        "**/__pycache__": true,
+        "**/.venv": true,
+        "**/.ruff_cache": true,
+        "**/cache": true,
+        "**/*.png": true,
+        "**/*.webp": true
+    },
+    "search.useIgnoreFiles": true
 }

@@ -266,6 +266,10 @@ checkpoints/
 # ONNX モデル (小さいので Git 管理してもよいが、大きくなるなら除外)
 # models/*.onnx
 
+# 巨大な SFEN dataset (詰将棋プール、開始局面プール)。ローカル生成用、Git 管理外
+assets/mate*.sfen
+assets/start_sfens_ply*.txt
+
 # rclone 認証設定 (機密)
 .rclone.conf
 

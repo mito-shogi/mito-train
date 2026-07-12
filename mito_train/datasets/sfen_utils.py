@@ -130,3 +130,50 @@ def _parse_hand(hand_str: str) -> list[int]:
     # Overflow guard for training: clip to HAND_MAX_COUNT-1 (should never trigger in practice)
     hand = [min(c, HAND_MAX_COUNT - 1) for c in hand]
     return hand
+
+
+_ID_TO_SYMBOL: dict[int, str] = {v: k for k, v in _BOARD_CLASS.items()}
+
+
+def encode_board(board: list[list[int]]) -> str:
+    ranks = []
+    for row in board:
+        rank = ""
+        empty = 0
+        for cid in row:
+            sym = _ID_TO_SYMBOL[cid]
+            if sym == ".":
+                empty += 1
+                continue
+            if empty:
+                rank += str(empty)
+                empty = 0
+            rank += sym
+        if empty:
+            rank += str(empty)
+        ranks.append(rank)
+    return "/".join(ranks)
+
+
+def encode_hand(hand: list[int]) -> str:
+    if sum(hand) == 0:
+        return "-"
+    out = ""
+    # SFEN convention: sente first (R,B,G,S,N,L,P), then gote same order.
+    order_sente = ["R", "B", "G", "S", "N", "L", "P"]
+    order_gote = [p.lower() for p in order_sente]
+    for p in order_sente + order_gote:
+        slot = _HAND_SLOT[p]
+        c = hand[slot]
+        if c <= 0:
+            continue
+        out += (str(c) if c > 1 else "") + p
+    return out
+
+
+def encode_sfen(board: list[list[int]], hand: list[int], turn: str = "b",
+                move_count: int | None = None) -> str:
+    parts = [encode_board(board), turn, encode_hand(hand)]
+    if move_count is not None:
+        parts.append(str(move_count))
+    return " ".join(parts)

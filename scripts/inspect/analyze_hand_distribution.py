@@ -1,8 +1,8 @@
 """持ち駒 (14 slots × 0..18 counts) の分布を train.jsonl から集計して可視化する。
 
 使い方:
-    uv run python scripts/analyze_hand_distribution.py \
-        --data ./data/train.jsonl --out ./runs/hand-distribution.png
+    uv run python scripts/inspect/analyze_hand_distribution.py \
+        --data ./data/ocr/train.jsonl --out ./runs/hand-distribution.png
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ SLOT_LABELS = [
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--data", type=Path, default=Path("./data/train.jsonl"))
+    p.add_argument("--data", type=Path, default=Path("./data/ocr/train.jsonl"))
     p.add_argument("--out", type=Path, default=Path("./runs/hand-distribution.png"))
     p.add_argument("--no-plot", action="store_true", help="skip saving PNG, only print table")
     args = p.parse_args()

@@ -7,12 +7,13 @@ Loads a board-ocr checkpoint and reports:
   - confusion matrix: true count -> predicted count (aggregated across slots)
 
 Usage:
-    uv run python scripts/diagnose_hand.py \
+    uv run python scripts/inspect/diagnose_hand.py \
         --ckpt ./runs/board-ocr-v2/latest.pt \
-        --val-manifest ./data/val.jsonl \
-        --image-root ./data/captures/d0
+        --val-manifest ./data/ocr/val.jsonl \
+        --image-root ./data/ocr/iPhone10,1
 """
 from __future__ import annotations
+
 import argparse
 from pathlib import Path
 
@@ -134,8 +135,8 @@ def diagnose(args: argparse.Namespace) -> None:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--ckpt", type=Path, default=Path("./runs/board-ocr-v2/latest.pt"))
-    p.add_argument("--val-manifest", type=Path, default=Path("./data/val.jsonl"))
-    p.add_argument("--image-root", type=Path, default=Path("./data/captures/d0"))
+    p.add_argument("--val-manifest", type=Path, default=Path("./data/ocr/val.jsonl"))
+    p.add_argument("--image-root", type=Path, default=Path("./data/ocr/iPhone10,1"))
     p.add_argument("--image-size", type=int, default=288)
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--num-workers", type=int, default=4)
