@@ -13,3 +13,7 @@ services:
 volumes:
   venv:
     driver: local
+  hf-cache:
+    driver: local
+  uv-cache:
+    driver: local

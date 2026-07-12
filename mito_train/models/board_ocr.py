@@ -19,8 +19,27 @@ from typing import Literal
 import torch
 import torch.nn as nn
 
-BackboneName = Literal["mobilenet_v3_small", "convnext_tiny"]
+BackboneName = Literal[
+    "mobilenet_v3_small",
+    "mobilenet_v3_large",
+    "efficientnet_b0",
+    "efficientnet_b1",
+    "convnext_atto",
+    "convnext_femto",
+    "convnext_pico",
+    "convnext_nano",
+    "convnext_tiny",
+]
 HandMode = Literal["classification", "regression"]
+
+# timm's convnext family (atto/femto/pico/nano) — same architecture as
+# torchvision's convnext_tiny, scaled down. Loaded uniformly via _TimmFeatureWrapper.
+_TIMM_CONVNEXT_VARIANTS: tuple[str, ...] = (
+    "convnext_atto",
+    "convnext_femto",
+    "convnext_pico",
+    "convnext_nano",
+)
 
 # Theoretical max count per hand slot (sente P,L,N,S,G,B,R then gote same order).
 # Pawn = 18, minor pieces = 4, bishop/rook = 2.
@@ -28,21 +47,57 @@ PIECE_MAX_PER_SLOT: tuple[int, ...] = (18, 4, 4, 4, 4, 2, 2, 18, 4, 4, 4, 4, 2, 
 
 
 def _build_backbone(name: BackboneName, pretrained: bool) -> tuple[nn.Module, int]:
-    """Return (features_module, out_channels)."""
+    """Return (features_module, out_channels).
+
+    torchvision backbones expose feature maps directly via `.features`.
+    timm backbones use `features_only=True` and return a list of feature
+    maps at each stride; we take the deepest (last) one.
+    """
     if name == "mobilenet_v3_small":
-        from torchvision.models import (
-            MobileNet_V3_Small_Weights,
-            mobilenet_v3_small,
-        )
+        from torchvision.models import MobileNet_V3_Small_Weights, mobilenet_v3_small
         weights = MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
         m = mobilenet_v3_small(weights=weights)
         return m.features, 576
+    if name == "mobilenet_v3_large":
+        from torchvision.models import MobileNet_V3_Large_Weights, mobilenet_v3_large
+        weights = MobileNet_V3_Large_Weights.DEFAULT if pretrained else None
+        m = mobilenet_v3_large(weights=weights)
+        return m.features, 960
+    if name == "efficientnet_b0":
+        from torchvision.models import EfficientNet_B0_Weights, efficientnet_b0
+        weights = EfficientNet_B0_Weights.DEFAULT if pretrained else None
+        m = efficientnet_b0(weights=weights)
+        return m.features, 1280
+    if name == "efficientnet_b1":
+        from torchvision.models import EfficientNet_B1_Weights, efficientnet_b1
+        weights = EfficientNet_B1_Weights.DEFAULT if pretrained else None
+        m = efficientnet_b1(weights=weights)
+        return m.features, 1280
     if name == "convnext_tiny":
         from torchvision.models import ConvNeXt_Tiny_Weights, convnext_tiny
         weights = ConvNeXt_Tiny_Weights.DEFAULT if pretrained else None
         m = convnext_tiny(weights=weights)
         return m.features, 768
+    if name in _TIMM_CONVNEXT_VARIANTS:
+        import timm
+        m = timm.create_model(name, pretrained=pretrained, features_only=True)
+        feat_dim = m.feature_info.channels()[-1]
+        return _TimmFeatureWrapper(m), feat_dim
     raise ValueError(f"unknown backbone: {name}")
+
+
+class _TimmFeatureWrapper(nn.Module):
+    """Adapts timm's features_only output (list of feature maps) to expose only
+    the deepest map, matching the torchvision `.features` contract used elsewhere.
+    """
+
+    def __init__(self, backbone: nn.Module) -> None:
+        super().__init__()
+        self.backbone = backbone
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        feats = self.backbone(x)
+        return feats[-1]
 
 
 class BoardOCR(nn.Module):

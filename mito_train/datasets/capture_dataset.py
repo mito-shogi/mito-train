@@ -50,16 +50,20 @@ def build_transform(
         return A.Compose([
             # Fit longest side to image_size, pad shorter side to square with black bars.
             # This preserves the entire board + both piece stands without clipping.
-            A.LongestMaxSize(max_size=image_size),
+            # INTER_AREA: fastest + best quality for downscaling (sources are
+            # larger than image_size), vs. the default INTER_LINEAR.
+            A.LongestMaxSize(max_size=image_size, interpolation=cv2.INTER_AREA),
             A.PadIfNeeded(
                 min_height=image_size, min_width=image_size,
                 border_mode=cv2.BORDER_CONSTANT, fill=0,
             ),
-            # Simulate position/scale jitter within the padded canvas (no content loss).
+            # Position/scale jitter modeling residual detector error only — the
+            # upstream board detector normalizes framing, so heavy jitter would
+            # waste capacity. Kept small to buffer a few px of crop drift.
             A.Affine(
-                translate_percent=(-0.05, 0.05),
-                scale=(0.9, 1.0),
-                border_mode=cv2.BORDER_CONSTANT, fill=0, p=0.7,
+                translate_percent=(-0.02, 0.02),
+                scale=(0.97, 1.03),
+                border_mode=cv2.BORDER_CONSTANT, fill=0, p=0.5,
             ),
             # Color / brightness / saturation (device differences)
             A.RandomBrightnessContrast(
@@ -68,14 +72,18 @@ def build_transform(
                 hue_shift_limit=5, sat_shift_limit=10, val_shift_limit=5, p=0.3),
             # Noise / degradation
             A.GaussNoise(std_range=(0.02, 0.08), p=0.3),
-            A.ImageCompression(quality_range=(50, 90), p=0.7),
-            A.Downscale(scale_range=(0.5, 0.9), p=0.3),
+            # Typical single-hop SNS re-encoding (Twitter/Insta/LINE, quality 65-92).
+            # JPEG encode/decode is CPU-heavy; p tuned to not starve GPU.
+            A.ImageCompression(quality_range=(65, 92), p=0.4),
+            # Rare heavy degradation: reshared / multi-hop / aggressive compressors.
+            A.ImageCompression(quality_range=(40, 60), p=0.05),
+            A.Downscale(scale_range=(0.5, 0.9), p=0.2),
             A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
             ToTensorV2(),
         ])
     else:
         return A.Compose([
-            A.LongestMaxSize(max_size=image_size),
+            A.LongestMaxSize(max_size=image_size, interpolation=cv2.INTER_AREA),
             A.PadIfNeeded(
                 min_height=image_size, min_width=image_size,
                 border_mode=cv2.BORDER_CONSTANT, fill=0,
