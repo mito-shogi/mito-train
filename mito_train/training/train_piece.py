@@ -59,7 +59,9 @@ def _init_wandb(
         print("[wandb] wandb is not installed (`uv sync --extra experiment`), skipping.")
         return None
 
-    settings_kwargs = {}
+    # x_disable_stats=True suppresses the auto-collected system metrics
+    # (GPU/CPU/mem/disk) that populate the "Charts" tab — noise for this project.
+    settings_kwargs: dict = {"x_disable_stats": True}
     cf_id = os.environ.get("CF_ACCESS_CLIENT_ID")
     cf_secret = os.environ.get("CF_ACCESS_CLIENT_SECRET")
     if cf_id and cf_secret:
@@ -69,7 +71,7 @@ def _init_wandb(
         }
         print("[wandb] injected CF Access headers.")
 
-    settings = wandb.Settings(**settings_kwargs) if settings_kwargs else None
+    settings = wandb.Settings(**settings_kwargs)
     init_kwargs = dict(project=project, name=run_name, config=config, settings=settings)
     if run_id is not None:
         init_kwargs["id"] = run_id
