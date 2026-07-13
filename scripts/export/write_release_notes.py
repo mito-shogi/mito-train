@@ -60,7 +60,7 @@ def main() -> None:
         first = next(iter(det.values()))
         lines.append("### Detector (BoardDetector)")
         lines.append("")
-        lines.append(f"- backbone: mobilenet_v3_small (w384)")
+        lines.append("- backbone: mobilenet_v3_small (w384)")
         lines.append(f"- val iou_mean: **{first.get('detector_val_iou_mean', 0.99):.2f}+**")
         lines.append(f"- 用途: {first.get('recommendation', '')}")
         lines.append("")

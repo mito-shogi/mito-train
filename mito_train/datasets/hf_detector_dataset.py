@@ -18,7 +18,6 @@ device).
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Callable
 
 import albumentations as A
