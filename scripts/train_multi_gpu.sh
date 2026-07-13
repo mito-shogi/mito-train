@@ -7,11 +7,18 @@
 #   PER_GPU_WORKERS   DataLoader workers per rank (defaults to 4; total across
 #                     ranks is NPROC_PER_NODE * PER_GPU_WORKERS)
 #   BACKBONE          Model backbone (defaults to mobilenet_v3_small)
+#   AUTO_FREE_GPUS    When 1, restrict training to GPUs whose used memory is
+#                     below FREE_GPU_MEM_MB (default 500). Sets
+#                     CUDA_VISIBLE_DEVICES and NPROC_PER_NODE to the survivors
+#                     so shared boxes don't step on running jobs.
+#   FREE_GPU_MEM_MB   "Free" threshold in MiB (default 500). Only used when
+#                     AUTO_FREE_GPUS=1.
 #
 # Examples:
 #   ./scripts/train_multi_gpu.sh                           # all GPUs, defaults
 #   NPROC_PER_NODE=8 BACKBONE=convnext_tiny ./scripts/train_multi_gpu.sh
 #   NPROC_PER_NODE=4 EPOCHS=100 ./scripts/train_multi_gpu.sh
+#   AUTO_FREE_GPUS=1 BACKBONE=mobilenet_v3_small ./scripts/train_multi_gpu.sh
 
 set -euo pipefail
 
@@ -19,6 +26,34 @@ set -euo pipefail
 detect_gpu_count() {
     uv run python -c "import torch; print(torch.cuda.device_count())" 2>/dev/null || echo 1
 }
+
+# Select GPU indices whose used memory is under FREE_GPU_MEM_MB. Prints a
+# comma-separated list (or an empty string if none qualify).
+detect_free_gpus() {
+    local threshold="${1:-500}"
+    nvidia-smi --query-gpu=index,memory.used --format=csv,noheader,nounits 2>/dev/null \
+        | awk -F, -v t="${threshold}" '{
+              gsub(/ /, "", $1); gsub(/ /, "", $2);
+              if ($2+0 < t+0) picks[n++] = $1
+          }
+          END {
+              for (i=0; i<n; i++) printf "%s%s", (i?",":""), picks[i]
+          }'
+}
+
+if [[ "${AUTO_FREE_GPUS:-0}" == "1" ]]; then
+    FREE_GPU_MEM_MB=${FREE_GPU_MEM_MB:-500}
+    free_list=$(detect_free_gpus "${FREE_GPU_MEM_MB}")
+    if [[ -z "${free_list}" ]]; then
+        echo "[train_multi_gpu] AUTO_FREE_GPUS=1 but no GPU has memory < ${FREE_GPU_MEM_MB}MiB" >&2
+        nvidia-smi --query-gpu=index,memory.used --format=csv >&2
+        exit 1
+    fi
+    export CUDA_VISIBLE_DEVICES="${free_list}"
+    # torchrun sees the remapped devices, so nproc is just the count.
+    NPROC_PER_NODE=$(awk -F, '{print NF}' <<<"${free_list}")
+    echo "[train_multi_gpu] AUTO_FREE_GPUS: CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} (threshold=${FREE_GPU_MEM_MB}MiB)"
+fi
 
 NPROC_PER_NODE=${NPROC_PER_NODE:-$(detect_gpu_count)}
 MASTER_PORT=${MASTER_PORT:-29500}
