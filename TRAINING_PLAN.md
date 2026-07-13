@@ -127,20 +127,24 @@ epoch を長めに指定して回すぶん、val 指標が K エポック改善�
 
 ## 次のイテレーションの優先順位（2026-07-13 更新）
 
-**背景**: §A/§B/§C/§D/§E は実装済み。w384 sweep で val sfen_acc が 0.976〜0.999 まで飽和。val 分布に穴（count≥11 が 0 件、飛の非ゼロ率が train の約半分）があるため、val 数字は上限に張り付いていて改善差を検出できない状態。次にやるべきことは追加学習ではなく **真の壁を測る評価** と **本番運用形の意思決定**。
+**背景**: §A/§B/§C/§D/§E は実装済み。w384 sweep で val sfen_acc が 0.976〜0.999 まで飽和。**realistic 評価も 2026-07-13 に実施済み** ([`docs/w384-sweep-analysis.md`](./docs/w384-sweep-analysis.md#realistic-評価-2026-07-13))、end-to-end (detector → OCR) で **cvnano/cvtiny が 99.92%、effb1 が 99.67%、mnv3l が 97.92%、mnv3s が 95.37%** を実測。以降は本番運用整備。
 
-1. **realistic / 実運用キャプチャでの再測定**（最優先）
-   - `test-realistic` セットや実運用の webp 群で 5 backbone を re-eval。val で 0.999 が realistic で何割落ちるかを見る。
-   - per-count recall（count ≥ 3, ≥ 7, ≥ 10）を hand mode 別に取る。
-2. **本番 backbone の確定**
-   - realistic 数字が近ければ **mobilenet_v3_large (3.3M) or efficientnet_b1 (7M) を本命**、convnext_nano (15M) は精度予備、convnext_tiny (28M) は落選。
-   - inference 速度と絡めて edge / cloud 用の分岐も決める。
-3. **realistic で hand tail が崩れた場合の再開手段**
+1. **~~realistic / 実運用キャプチャでの再測定~~**（済み）
+   - piyoshogi-eval で 5 backbone × 4 device × 1000 SFEN を実測。上記結論を参照。
+2. **本番 backbone の確定**（realistic 反映済み）
+   - **クラウド API 精度優先**: convnext_nano (15M) — realistic 99.92%、iPad で 100.00%
+   - **クラウド標準 (Pareto)**: efficientnet_b1 (7M) — realistic 99.67%、cvnano の半分 params で -0.25pt 差
+   - **Edge / WASM**: mobilenet_v3_large (3.3M) — realistic 97.92%、これが下限
+   - **落選**: mobilenet_v3_small (95.37%、mnv3l に劣る) / convnext_tiny (nano と同点、params 倍)
+3. **realistic で hand tail が崩れた場合の再開手段**（発動条件未達）
    - 手段 A: `--hand-mode regression` を w384 で再学習（既に実装、config 変えるだけ）。
    - 手段 B: v3 データマージ（下記 v3 セクション、scripts 未実装 / データ未生成の状態から再開）。
    - 手段 C: focal loss / effective number（未実装）を §B に追加。
-4. **F（piece manifest 実装）** — 使途を整理してから。board_ocr の board head で駒種分類は解決している状態なので、piece_classifier 単体の位置づけは要再定義。
-5. **G, H** — あると便利、なくても致命的ではない。
+   - **realistic 側で hand_full=100.00% × 4 backbone を達成**しているため、上記手段は不要と判断。
+4. **piyoshogi-eval iPad annotation の見直し**（優先度：中）
+   - detector 予測 bbox で救えるので緊急ではないが、OCR 単体 eval で iPad を測れないのは資産として不便。annotation 再生成 or annotation 規約を `detector_paired` 側に合わせる。
+5. **F（piece manifest 実装）** — 使途を整理してから。board_ocr の board head で駒種分類は解決している状態なので、piece_classifier 単体の位置づけは要再定義。
+6. **G, H** — あると便利、なくても致命的ではない。
 
 ## 既知のデータ制約
 

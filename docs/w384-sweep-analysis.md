@@ -150,3 +150,123 @@ W&B project: `mito-train-board-ocr-w384-v0.3.1`。今回の sweep run 一覧:
 | convnext_tiny      | ypxo5yvz |
 
 ローカルログは `runs/logs/<backbone>.log`、checkpoint は `runs/board-ocr-<backbone>/epoch-{005,010,...,200}.pt`。
+
+---
+
+# realistic 評価 (2026-07-13)
+
+`ultemica/piyoshogi-eval` (`paired` config, 1,000 SFEN × 4 device = 4,000 画像、train/val と leak なし) を使い、5 backbone × 4 device で val の realistic 転移を実測した。2 段階で実施:
+
+1. **OCR 単体 eval** (`scripts/eval/eval_realistic.py`): piyoshogi-eval の GT `bboxes` で crop → OCR。
+2. **end-to-end eval** (`scripts/eval/eval_realistic_e2e.py`): 生スクショ → **detector 予測 bbox で crop** → OCR (`runs/board-detector-v1/latest.pt`、mobilenet_v3_small / w384 / val iou_mean 0.99+)。
+
+## 結論 (先に)
+
+- **efficientnet_b1 (7M) / convnext_nano (15M) / convnext_tiny (28M) は 4 device 全てで realistic SFEN 99.60〜100.00% 到達**。val ep200 の 0.999 は誇張ではなかった。
+- **convnext_nano / convnext_tiny は iPad14,10 で 1,000 局面全問正解 (100.00%)**、mean sfen **99.92%** で val を実測が上回った。
+- **mobilenet_v3_large (3.3M) は 97.60〜98.20% で edge 用の実用下限**、mobilenet_v3_small (1.1M) は 93.89〜96.30% で容量律速が実運用でも顕在化。
+- **iPad14,10 は OCR 単体 eval で board=0.00% に落ちた** が、これは piyoshogi-eval の GT bbox が OCR 学習側 crop 規約と一致していなかったため。detector 予測 bbox で crop すると **全 backbone 93.89〜100.00% に復活**。iPad の失敗は「モデルの iPad domain gap」ではなく **「評価データ側の bbox 規約ズレ」** だった。
+
+## 1. OCR 単体 eval (GT bbox → crop → OCR)
+
+`scripts/eval/eval_realistic.py --backbones <bb> --wandb`
+wandb project: `mito-train-board-ocr-w384-v0.3.1-eval-realistic`
+
+**SFEN Exact-Match**:
+
+| Backbone | iPhone10,1 | iPhone11,8 | iPhone15,4 | iPad14,10 | val ep200 |
+|---|---:|---:|---:|---:|---:|
+| mobilenet_v3_small | 0.956 | 0.951 | 0.957 | **0.000** | 0.976 |
+| mobilenet_v3_large | 0.985 | 0.985 | 0.985 | **0.000** | 0.995 |
+| efficientnet_b1    | 0.997 | 0.996 | 0.996 | **0.006** | 0.999 |
+| convnext_nano      | 0.999 | 0.999 | 1.000 | **0.000** | 0.999 |
+| convnext_tiny      | 0.999 | 0.999 | 0.999 | **0.001** | 0.999 |
+
+**読み取り**:
+
+- **iPhone 3 機種は val と実質同水準** (val 0.999 の backbone は realistic も 0.996〜1.000)。realistic domain gap は iPhone に対しては ≤ 0.3pt。
+- **iPad14,10 の board_full が全 backbone で 0.00%** (effb1 0.6%、cvtiny 0.1% のみ非零)、一方 hand_full=100% / slot_acc=100%、cell_acc=83〜92%。「マス単位では 8-9 割合うが 81 マス連続一致が絶対に取れない」= 系統的な誤読 → データ側の crop convention 不一致を疑う。
+- ラベル 0 (=空スロット) が 75% の val 分布と違って、realistic は駒種頻度が train により近い → hand の realistic 転移は本当に強い (hand_full=100.0% × 4 backbone)。
+
+## 2. end-to-end eval (detector 予測 bbox → crop → OCR)
+
+`scripts/eval/eval_realistic_e2e.py --backbones <bb> --wandb`
+wandb project: `mito-train-board-ocr-w384-v0.3.1-eval-realistic-e2e`
+
+**SFEN Exact-Match**:
+
+| Backbone | iPhone10,1 | iPhone11,8 | iPhone15,4 | iPad14,10 | mean |
+|---|---:|---:|---:|---:|---:|
+| mobilenet_v3_small | 0.9610 | 0.9630 | 0.9520 | 0.9389 | 0.9537 |
+| mobilenet_v3_large | 0.9800 | 0.9790 | 0.9820 | 0.9760 | 0.9792 |
+| efficientnet_b1    | 0.9970 | 0.9970 | 0.9960 | 0.9970 | **0.9967** |
+| convnext_nano      | 0.9990 | 0.9990 | 0.9990 | **1.0000** | **0.9992** |
+| convnext_tiny      | 0.9990 | 0.9990 | 0.9990 | **1.0000** | **0.9992** |
+
+**detector iou_mean (予測 bbox ↔ piyoshogi-eval GT bbox)**:
+
+| Device | iou |
+|---|---:|
+| iPhone10,1 | 0.991 |
+| iPhone11,8 | 0.991 |
+| iPhone15,4 | 0.989 |
+| **iPad14,10** | **0.842** |
+
+**読み取り**:
+
+- **iPad14,10 の board 全崩壊は消滅**。OCR 単体 0.00% → end-to-end 93.89〜100.00% に。全 backbone で iPad SFEN ≥ 93.89%。
+- iPad の iou 0.842 は **piyoshogi-eval GT bbox の annotation が detector 学習側 (=OCR 学習側) 規約と食い違っている** ことを示している。iPad だけ bbox の切り方 (余白の取り方、盤+持ち駒の含み方) が違う。iPhone 3 機種は iou 0.99+ で規約一致。
+- **detector を挟むと iPhone は「学習側 crop に normalize される効果」で val とほぼ同じ**。iPhone e2e SFEN は val -0.02〜-0.30pt 圏内。
+- **convnext_nano/tiny は iPad で 100.00% (1000/1000)**。cell_acc も全 device で 100.00%。**val 分布の穴 (count≥11 が 0 件、飛の非ゼロ率が train の約半分) で val 0.999 に張り付いていた 2 個の backbone が、realistic 側で val 越えを達成**。
+
+## 3. realistic - val ギャップまとめ
+
+| Backbone | val ep200 | realistic e2e mean | gap |
+|---|---:|---:|---:|
+| mobilenet_v3_small | 0.976 | 0.9537 | -2.23pt |
+| mobilenet_v3_large | 0.995 | 0.9792 | -1.58pt |
+| efficientnet_b1    | 0.999 | 0.9967 | -0.23pt |
+| convnext_nano      | 0.999 | 0.9992 | **+0.02pt** |
+| convnext_tiny      | 0.999 | 0.9992 | **+0.02pt** |
+
+- **backbone サイズが大きいほど realistic 転移が良い**。mnv3s は -2.23pt (augmentation ロバスト性が低い + 容量律速)、cvnano/cvtiny は val を超える。
+- **mnv3s の realistic 落差 -2.23pt** は sweep 時点で予測していた augmentation gap (train sfen 0.846 vs val 0.976 の -0.13 差) の予兆通り。ただし iPad 特有の追加落差ではない (iPad 0.939 vs iPhone 平均 0.958 = -1.9pt 差)。
+
+## 4. backbone 選定の結論 (realistic 反映後)
+
+`TRAINING_PLAN.md` の「本命 backbone の確定」を realistic 数値で書き直す:
+
+| 用途 | 推奨 backbone | 根拠 |
+|---|---|---|
+| クラウド API (精度優先) | **convnext_nano (15M) or convnext_tiny (28M)** | realistic 99.92% 到達、iPad で 100.00%、val 上回り |
+| クラウド標準 (Pareto 効率) | **efficientnet_b1 (7M)** | realistic 99.67%、cvnano 半分の params で -0.25pt 差 |
+| Edge / WASM | **mobilenet_v3_large (3.3M)** | realistic 97.92%、mnv3s より +2.5pt 差でここが下限 |
+| 落選 | mobilenet_v3_small (1.1M) | realistic 95.37% は用途限定、量子化しても mnv3l に劣る |
+| 落選 | convnext_tiny (28M) | cvnano と同点、params 倍のメリット無し |
+
+**本命 = efficientnet_b1、精度上限狙い = convnext_nano、edge = mobilenet_v3_large の 3 枚看板** で確定。
+
+## 5. detector 側への含意
+
+- **piyoshogi-eval `paired` config の iPad14,10 `bboxes` は annotation を見直す価値がある**。detector iou_mean が iPhone 0.99+ に対し iPad だけ 0.84 まで落ちるのは、eval 側の annotation 規約が detector 学習側と一致していないから。iPad の GT bbox を detector 学習側規約 (`ocr_paired` の crop 由来) に合わせて再アノテすれば OCR 単体 eval の iPad も救われる。ただし現状 e2e で iPad 100% 取れているので優先度は中。
+- 詳細は [`../DETECTOR_STATUS.md`](../DETECTOR_STATUS.md) 参照。
+
+## 6. 再現用コマンド
+
+```bash
+# OCR 単体 eval (5 backbone 並列、GPU 1/3/4/5/6)
+for gpu_bb in "1:mobilenet_v3_small" "3:mobilenet_v3_large" "4:efficientnet_b1" "5:convnext_nano" "6:convnext_tiny"; do
+  gpu=${gpu_bb%%:*}; bb=${gpu_bb##*:}
+  CUDA_VISIBLE_DEVICES=$gpu uv run python scripts/eval/eval_realistic.py \
+    --backbones $bb --wandb --out runs/eval/realistic-w384-20260713-$bb.json &
+done; wait
+
+# end-to-end eval (同上)
+for gpu_bb in "1:mobilenet_v3_small" "3:mobilenet_v3_large" "4:efficientnet_b1" "5:convnext_nano" "6:convnext_tiny"; do
+  gpu=${gpu_bb%%:*}; bb=${gpu_bb##*:}
+  CUDA_VISIBLE_DEVICES=$gpu uv run python scripts/eval/eval_realistic_e2e.py \
+    --backbones $bb --wandb --out runs/eval/e2e-realistic-w384-20260713-$bb.json &
+done; wait
+```
+
+出力 JSON: `runs/eval/realistic-w384-20260713-<bb>.json` / `runs/eval/e2e-realistic-w384-20260713-<bb>.json`。
