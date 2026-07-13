@@ -17,6 +17,7 @@ metric all_reduce all activate only when actually distributed.
 from __future__ import annotations
 
 import argparse
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
 import torch
@@ -301,8 +302,9 @@ def run(args: argparse.Namespace) -> None:
 
     # Only rank 0 talks to W&B; other ranks keep wandb_run=None and log nothing.
     run_name = args.backbone
+    wandb_project = f"mito-train-board-ocr-w{args.image_size}-v{_pkg_version('mito-train')}"
     wandb_run = _init_wandb(
-        project="mito-train-board-ocr",
+        project=wandb_project,
         run_name=run_name,
         run_id=resumed_wandb_id,
         resume="allow" if resumed_wandb_id else None,

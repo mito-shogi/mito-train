@@ -364,5 +364,5 @@ BoardOCR では未実装だが、モバイル配信で精度を詰めたい場�
 
 各 backbone の val cell_acc / sfen_full_acc / wall-clock は sweep 完了後に W&B で並び、ここに引用予定。
 
-- W&B project: `mito-train-board-ocr`
+- W&B project: `mito-train-board-ocr-w{image_size}-v{package_version}` (例: `mito-train-board-ocr-w224-v0.2.0`)
 - run 名は各 backbone 名そのまま（例: `mobilenet_v3_small`, `convnext_tiny`）
