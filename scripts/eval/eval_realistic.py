@@ -210,10 +210,32 @@ def main() -> None:
                    help="Cap SFEN rows (applied before per-device flatten).")
     p.add_argument("--out", type=Path, default=None,
                    help="JSON output path; parent dir auto-created.")
+    p.add_argument("--wandb", action="store_true",
+                   help="Log per-(backbone, device) metrics to W&B.")
+    p.add_argument("--wandb-project", default="mito-train-board-ocr-w384-v0.3.1-eval-realistic")
+    p.add_argument("--wandb-run-name", default=None,
+                   help="Defaults to 'realistic-YYYYMMDDTHHMMSS'.")
     args = p.parse_args()
 
     device_str = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"[eval] device={device_str} backbones={args.backbones} devices={args.devices}")
+
+    wandb_run = None
+    if args.wandb:
+        run_name = args.wandb_run_name or time.strftime("realistic-%Y%m%dT%H%M%S")
+        wandb_run = _init_wandb(
+            project=args.wandb_project,
+            run_name=run_name,
+            config={
+                "dataset": REPO_ID,
+                "config": CONFIG,
+                "backbones": list(args.backbones),
+                "devices": list(args.devices),
+                "batch_size": args.batch_size,
+                "limit": args.limit,
+                "ckpt_name": args.ckpt_name,
+            },
+        )
 
     per_dev = load_eval_rows(args.devices, args.limit)
 
@@ -236,15 +258,36 @@ def main() -> None:
             m = eval_backbone_device(model, tf, device_str, per_dev[dev], args.batch_size)
             results[bb][dev] = m
             print(fmt_row(bb, dev, m["n"], m, time.time() - t0))
+            if wandb_run is not None:
+                dev_slug = dev.replace(",", "_")
+                wandb_run.log({
+                    f"{bb}/{dev_slug}/cell": m["cell"],
+                    f"{bb}/{dev_slug}/board_full": m["board_full"],
+                    f"{bb}/{dev_slug}/slot": m["slot"],
+                    f"{bb}/{dev_slug}/hand_full": m["hand_full"],
+                    f"{bb}/{dev_slug}/sfen": m["sfen"],
+                    f"{bb}/{dev_slug}/hand_mae": m["hand_mae"],
+                    f"{bb}/{dev_slug}/n": m["n"],
+                    f"{bb}/{dev_slug}/skipped": m["skipped"],
+                })
         del model
         if device_str == "cuda":
             torch.cuda.empty_cache()
 
     print("\n=== per-backbone average across devices (unweighted mean of sfen) ===")
+    summary: dict[str, float] = {}
     for bb, dev_map in results.items():
         sfens = [v["sfen"] for k, v in dev_map.items() if not k.startswith("_")]
         if sfens:
-            print(f"  {bb:<20} mean sfen = {sum(sfens) / len(sfens) * 100:6.2f}%")
+            avg = sum(sfens) / len(sfens)
+            summary[bb] = avg
+            print(f"  {bb:<20} mean sfen = {avg * 100:6.2f}%")
+
+    if wandb_run is not None:
+        wandb_run.log({"summary/mean_sfen": summary})
+        for bb, avg in summary.items():
+            wandb_run.summary[f"{bb}/mean_sfen"] = avg
+        wandb_run.finish()
 
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
