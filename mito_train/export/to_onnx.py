@@ -76,6 +76,10 @@ def main() -> None:
     p.add_argument("--model", choices=list(MODEL_SPECS), default="piece")
     p.add_argument("--out", type=Path, default=None)
     p.add_argument("--opset", type=int, default=17)
+    p.add_argument("--dynamic-batch", action="store_true",
+                   help="Export with dynamic batch dim. Off by default because "
+                        "trace-based export + AdaptiveAvgPool2d in BoardOCR doesn't "
+                        "survive dynamic batching. Browser inference runs batch=1.")
     args = p.parse_args()
 
     ck: dict | None = None
@@ -98,16 +102,25 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     dummy = torch.randn(*dummy_shape)
 
-    dynamic_axes = {n: {0: "batch"} for n in in_names + out_names}
+    dynamic_axes = {n: {0: "batch"} for n in in_names + out_names} if args.dynamic_batch else None
+    # BoardOCR's board_head uses AdaptiveAvgPool2d((9,9)) on a feature map
+    # whose spatial dim isn't a multiple of 9 (e.g. mnv3l gives 12x12 at
+    # input 384). The legacy trace-based exporter refuses that op; the dynamo
+    # exporter handles it via F.interpolate + AvgPool internally. So we use
+    # dynamo=True for the OCR family and dynamo=False for the detector (which
+    # ends with a straight AdaptiveAvgPool2d(1) that trace handles fine and
+    # produces a graph the quantizer can consume).
+    use_dynamo = args.model in ("board_ocr",)
     torch.onnx.export(
         model, dummy, str(out),
         input_names=in_names, output_names=out_names,
         dynamic_axes=dynamic_axes,
         opset_version=args.opset,
+        dynamo=use_dynamo,
     )
 
-    # torch 2.x dynamo exporter can externalize weights to <name>.onnx.data.
-    # Inline them back into a single file for simple R2 delivery / MITO loading.
+    # In case any external-weights file was produced (dynamo path used it),
+    # inline it back into a single file for simple R2 delivery / MITO loading.
     import onnx
     sidecar = out.with_name(out.name + ".data")
     if sidecar.exists():

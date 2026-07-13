@@ -15,6 +15,7 @@ MITO ↔ mito-train 契約と mito-train 固有ドキュメント。
 - `w384-sweep-analysis.md` — w384 backbone sweep の考察 (収束速度・過剰 epoch・train↔val ギャップ, 2026-07-13)
 - `resolution-tradeoff.md` — 学習/推論解像度 (w224 vs w384) の運用トレードオフと配信別の推奨
 - `browser-inference-outlook.md` — ブラウザ WebGPU の推論時間見積もり (iGPU / iOS / Android × 5 backbone、2026-07-13)
+- `model-export.md` — ONNX export / fp16・int8 変換 / GitHub Release パイプラインの手順書
 
 ## データセットの正規
 

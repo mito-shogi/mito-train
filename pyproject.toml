@@ -40,3 +40,8 @@ packages = ["mito_train"]
 # キャッシュと .venv が別ファイルシステム (マウントボリューム) なので
 # ハードリンク不可 → copy に固定して警告を抑止。
 link-mode = "copy"
+
+[dependency-groups]
+dev = [
+    "onnxconverter-common>=1.16.0",
+]
