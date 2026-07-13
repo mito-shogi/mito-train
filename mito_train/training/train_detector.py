@@ -28,6 +28,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from mito_train.datasets import DetectorDataset, build_detector_transform
+from mito_train.datasets import HFDetectorDataset
 from mito_train.models import BoardDetector
 from mito_train.training.train_piece import _init_wandb, get_device
 
@@ -97,6 +98,9 @@ def main() -> None:
     p.add_argument("--wandb-run-id", default=None)
     p.add_argument("--wandb-resume", default=None)
     p.add_argument("--resume-from", type=Path, default=None)
+    p.add_argument("--hf-repo-id", default=None,
+                   help="If set, load train/val from this HF dataset repo instead of local jsonl.")
+    p.add_argument("--hf-config", default="detector_paired")
     args = p.parse_args()
 
     device = get_device()
