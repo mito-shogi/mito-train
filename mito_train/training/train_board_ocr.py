@@ -26,6 +26,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
@@ -282,6 +283,34 @@ def run(args: argparse.Namespace) -> None:
         model.parameters(), lr=args.lr, weight_decay=1e-4, fused=use_cuda,
     )
 
+    # Per-step scheduler: linear warmup for --warmup-epochs, then cosine anneal
+    # to lr * --min-lr-ratio over the remaining steps. Every rank steps in
+    # lockstep (same len(train_loader) shard size), so DDP stays in sync.
+    steps_per_epoch = len(train_loader)
+    total_steps = max(1, args.epochs * steps_per_epoch)
+    warmup_steps = max(0, args.warmup_epochs * steps_per_epoch)
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None
+    if args.scheduler == "cosine":
+        cosine_steps = max(1, total_steps - warmup_steps)
+        eta_min = args.lr * args.min_lr_ratio
+        if warmup_steps > 0:
+            warmup = LinearLR(
+                optimizer, start_factor=1e-3, end_factor=1.0, total_iters=warmup_steps,
+            )
+            cosine = CosineAnnealingLR(optimizer, T_max=cosine_steps, eta_min=eta_min)
+            scheduler = SequentialLR(
+                optimizer, schedulers=[warmup, cosine], milestones=[warmup_steps],
+            )
+        else:
+            scheduler = CosineAnnealingLR(optimizer, T_max=cosine_steps, eta_min=eta_min)
+        log_main(
+            f"[board_ocr] scheduler=cosine peak_lr={args.lr:.2e} "
+            f"warmup={args.warmup_epochs}ep ({warmup_steps} steps) "
+            f"anneal={cosine_steps} steps -> min_lr={eta_min:.2e}"
+        )
+    else:
+        log_main(f"[board_ocr] scheduler=none lr={args.lr:.2e} (constant)")
+
     ckpt_dir = args.ckpt_root / args.model_name
     if is_main():
         ckpt_dir.mkdir(parents=True, exist_ok=True)
@@ -301,6 +330,8 @@ def run(args: argparse.Namespace) -> None:
             optimizer.load_state_dict(ckpt["optimizer"])
             if ckpt.get("scaler") is not None and scaler.is_enabled():
                 scaler.load_state_dict(ckpt["scaler"])
+            if ckpt.get("scheduler") is not None and scheduler is not None:
+                scheduler.load_state_dict(ckpt["scheduler"])
             start_epoch = ckpt["epoch"] + 1
             resumed_from = str(ckpt_path)
             resumed_wandb_id = ckpt.get("wandb_run_id")
@@ -329,6 +360,9 @@ def run(args: argparse.Namespace) -> None:
             "effective_batch_size": args.batch_size * world_size,
             "world_size": world_size,
             "lr": args.lr,
+            "scheduler": args.scheduler,
+            "warmup_epochs": args.warmup_epochs,
+            "min_lr_ratio": args.min_lr_ratio,
             "epochs": args.epochs,
             "start_epoch": start_epoch,
             "resumed_from": resumed_from,
@@ -380,6 +414,8 @@ def run(args: argparse.Namespace) -> None:
             scaler.scale(total).backward()
             scaler.step(optimizer)
             scaler.update()
+            if scheduler is not None:
+                scheduler.step()
             running_loss += total.detach()
             running_board_loss += bl.detach()
             running_hand_loss += hl.detach()
@@ -401,6 +437,7 @@ def run(args: argparse.Namespace) -> None:
                         "step/hand_loss": hl.item(),
                         "step/board/cell_acc": m["board/cell_acc"].item(),
                         "step/hand/slot_acc": m["hand/slot_acc"].item(),
+                        "step/lr": optimizer.param_groups[0]["lr"],
                         "step/global_step": global_step,
                         "step/epoch_frac": epoch - 1 + n_batches / len(train_loader),
                     })
@@ -484,6 +521,7 @@ def run(args: argparse.Namespace) -> None:
                 "model": _unwrap(model).state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scaler": scaler.state_dict() if scaler.is_enabled() else None,
+                "scheduler": scheduler.state_dict() if scheduler is not None else None,
                 "backbone": args.backbone,
                 "image_size": args.image_size,
                 "hand_weight": args.hand_weight,
@@ -550,6 +588,12 @@ def main() -> None:
                    help="torch.compile the model. Worth measuring for full runs; "
                         "compile overhead usually not worth it for smoke runs.")
     p.add_argument("--lr", type=float, default=3e-4)
+    p.add_argument("--scheduler", choices=["none", "cosine"], default="cosine",
+                   help="Per-step LR schedule. cosine = linear warmup then cosine anneal.")
+    p.add_argument("--warmup-epochs", type=int, default=5,
+                   help="Epochs of linear warmup (0 -> lr). Ignored when --scheduler=none.")
+    p.add_argument("--min-lr-ratio", type=float, default=0.01,
+                   help="Cosine anneal floor as a fraction of --lr (min_lr = lr * ratio).")
     p.add_argument("--hand-mode", choices=["classification", "regression"],
                    default="classification",
                    help="classification: 14x19 logits + CE. regression: 14 scalars + SmoothL1.")
