@@ -6,7 +6,7 @@ services:
     volumes:
       - ../:/home/vscode/app:cached
       - venv:/home/vscode/app/.venv
-    shm_size: 4gb
+    shm_size: 32gb
     tty: true
     stdin_open: true
 
