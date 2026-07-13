@@ -227,29 +227,49 @@ def main() -> None:
     p.add_argument("--out", type=Path, default=None,
                    help="JSON output path; parent dir auto-created.")
     p.add_argument("--wandb", action="store_true",
-                   help="Log per-(backbone, device) metrics to W&B.")
+                   help="Log per-device metrics to W&B (one run per backbone).")
     p.add_argument("--wandb-project", default="mito-train-board-ocr-w384-v0.3.1-eval-realistic")
     p.add_argument("--wandb-run-name", default=None,
-                   help="Defaults to 'realistic-YYYYMMDDTHHMMSS'.")
+                   help="Wandb run display name. Defaults to the backbone name so "
+                        "the eval run pairs with the training run under the same label.")
+    p.add_argument("--wandb-group", default=None,
+                   help="Wandb group identifier so parallel per-backbone runs cluster "
+                        "under one entry in the dashboard. Defaults to 'realistic-YYYYMMDD'.")
     args = p.parse_args()
 
     device_str = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"[eval] device={device_str} backbones={args.backbones} devices={args.devices}")
 
+    if args.wandb and len(args.backbones) != 1:
+        # Requiring one backbone per invocation keeps run name = backbone name
+        # so the eval run maps 1:1 to the training run (same label in wandb).
+        # Fan out across GPUs by launching one process per backbone.
+        raise SystemExit(
+            "[eval] --wandb requires exactly one --backbones entry per invocation "
+            "(one wandb run per backbone; parallelize across GPUs at the shell level)."
+        )
+
     wandb_run = None
     if args.wandb:
-        run_name = args.wandb_run_name or time.strftime("realistic-%Y%m%dT%H%M%S")
+        bb_for_wandb = args.backbones[0]
+        run_name = args.wandb_run_name or bb_for_wandb
+        group = args.wandb_group or time.strftime("realistic-%Y%m%d")
+        # Group/job_type are init-time only in wandb; set them via env vars so
+        # _init_wandb (which doesn't expose those kwargs) picks them up.
+        _os.environ["WANDB_RUN_GROUP"] = group
+        _os.environ["WANDB_JOB_TYPE"] = "eval-realistic"
         wandb_run = _init_wandb(
             project=args.wandb_project,
             run_name=run_name,
             config={
                 "dataset": REPO_ID,
                 "config": CONFIG,
-                "backbones": list(args.backbones),
+                "backbone": bb_for_wandb,
                 "devices": list(args.devices),
                 "batch_size": args.batch_size,
                 "limit": args.limit,
                 "ckpt_name": args.ckpt_name,
+                "group": group,
             },
         )
 
@@ -277,14 +297,14 @@ def main() -> None:
             if wandb_run is not None:
                 dev_slug = dev.replace(",", "_")
                 wandb_run.log({
-                    f"{bb}/{dev_slug}/cell": m["cell"],
-                    f"{bb}/{dev_slug}/board_full": m["board_full"],
-                    f"{bb}/{dev_slug}/slot": m["slot"],
-                    f"{bb}/{dev_slug}/hand_full": m["hand_full"],
-                    f"{bb}/{dev_slug}/sfen": m["sfen"],
-                    f"{bb}/{dev_slug}/hand_mae": m["hand_mae"],
-                    f"{bb}/{dev_slug}/n": m["n"],
-                    f"{bb}/{dev_slug}/skipped": m["skipped"],
+                    f"{dev_slug}/cell": m["cell"],
+                    f"{dev_slug}/board_full": m["board_full"],
+                    f"{dev_slug}/slot": m["slot"],
+                    f"{dev_slug}/hand_full": m["hand_full"],
+                    f"{dev_slug}/sfen": m["sfen"],
+                    f"{dev_slug}/hand_mae": m["hand_mae"],
+                    f"{dev_slug}/n": m["n"],
+                    f"{dev_slug}/skipped": m["skipped"],
                 })
         del model
         if device_str == "cuda":
@@ -300,9 +320,11 @@ def main() -> None:
             print(f"  {bb:<20} mean sfen = {avg * 100:6.2f}%")
 
     if wandb_run is not None:
-        wandb_run.log({"summary/mean_sfen": summary})
-        for bb, avg in summary.items():
-            wandb_run.summary[f"{bb}/mean_sfen"] = avg
+        # Single-backbone run: summary/mean_sfen is a scalar, not a dict.
+        if len(summary) == 1:
+            avg = next(iter(summary.values()))
+            wandb_run.log({"summary/mean_sfen": avg})
+            wandb_run.summary["summary/mean_sfen"] = avg
         wandb_run.finish()
 
     if args.out is not None:
