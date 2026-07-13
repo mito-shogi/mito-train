@@ -20,6 +20,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -74,6 +76,9 @@ def evaluate(model: nn.Module, loader: DataLoader, device: str) -> dict[str, flo
 
 
 def main() -> None:
+    # Pull HF_TOKEN / WANDB_API_KEY / CF_* out of .env into os.environ before
+    # any wandb or HF call resolves credentials. No-op if .env is missing.
+    load_dotenv()
     p = argparse.ArgumentParser()
     p.add_argument("--train-manifest", type=Path, default=Path("data/detector/train.jsonl"))
     p.add_argument("--val-manifest", type=Path, default=Path("data/detector/val.jsonl"))
