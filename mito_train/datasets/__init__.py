@@ -6,7 +6,7 @@ from .piyo_dataset import PiyoDataset
 __all__ = [
     "PiyoDataset", "PiecesDataset", "CaptureDataset", "build_transform",
     "DetectorDataset", "build_detector_transform",
-    "HFCaptureDataset", "HFPairedDataset",
+    "HFCaptureDataset", "HFPairedDataset", "HFDetectorDataset",
 ]
 
 
@@ -18,4 +18,7 @@ def __getattr__(name):
     if name == "HFPairedDataset":
         from .hf_paired_dataset import HFPairedDataset
         return HFPairedDataset
+    if name == "HFDetectorDataset":
+        from .hf_detector_dataset import HFDetectorDataset
+        return HFDetectorDataset
     raise AttributeError(f"module 'mito_train.datasets' has no attribute {name!r}")
