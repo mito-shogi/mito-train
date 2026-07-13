@@ -44,39 +44,67 @@ def build_detector_transform(
     if mode == "train":
         return A.Compose(
             [
+                # Positive-only per-side padding -> asymmetric letterboxing.
+                # Never crops into the source, so the board bbox is preserved intact.
+                A.CropAndPad(
+                    percent=(
+                        (0.0, 0.35),  # top
+                        (0.0, 0.35),  # right
+                        (0.0, 0.35),  # bottom
+                        (0.0, 0.35),  # left
+                    ),
+                    keep_size=False,
+                    border_mode=cv2.BORDER_CONSTANT,
+                    fill=0,
+                    p=0.8,
+                ),
                 A.LongestMaxSize(max_size=image_size),
                 A.PadIfNeeded(
                     min_height=image_size, min_width=image_size,
                     border_mode=cv2.BORDER_CONSTANT, fill=0,
                 ),
+                # Anisotropic scale (x/y independent) stretches/squashes the board.
+                # Conservative range so the bbox usually stays inside the canvas;
+                # any edge-clipping sample is dropped by min_visibility=1.0 below.
                 A.Affine(
-                    scale=(0.7, 1.05),
-                    translate_percent=(-0.08, 0.08),
-                    rotate=(-6, 6),
-                    shear=(-2, 2),
+                    scale={"x": (0.75, 1.15), "y": (0.75, 1.15)},
+                    keep_ratio=False,
+                    translate_percent=(-0.05, 0.05),
+                    rotate=0,
+                    shear=0,
                     fit_output=False,
                     border_mode=cv2.BORDER_CONSTANT,
                     p=0.9,
                 ),
-                A.Perspective(scale=(0.02, 0.05), p=0.3),
+                # erosion_rate=0.0 -> crop always contains the full board bbox.
+                # p=0.85 matches "zoomed-in-on-board" SNS reposts (UI chrome
+                # around the board is cropped away, board itself intact).
                 A.RandomSizedBBoxSafeCrop(
-                    height=image_size, width=image_size, erosion_rate=0.15, p=0.5
+                    height=image_size, width=image_size, erosion_rate=0.0, p=0.85
                 ),
                 A.LongestMaxSize(max_size=image_size),
                 A.PadIfNeeded(
                     min_height=image_size, min_width=image_size,
                     border_mode=cv2.BORDER_CONSTANT, fill=0,
                 ),
-                A.ImageCompression(quality_range=(50, 95), p=0.7),
-                A.Downscale(scale_range=(0.5, 0.9), p=0.4),
-                A.GaussNoise(std_range=(0.01, 0.05), p=0.3),
-                A.RandomBrightnessContrast(brightness_limit=0.15, contrast_limit=0.15, p=0.4),
+                A.ImageCompression(quality_range=(30, 90), p=0.85),
+                A.Downscale(scale_range=(0.35, 0.85), p=0.55),
+                A.OneOf(
+                    [
+                        A.GaussNoise(std_range=(0.02, 0.08), p=1.0),
+                        A.MotionBlur(blur_limit=(3, 7), p=1.0),
+                        A.GaussianBlur(blur_limit=(3, 5), p=1.0),
+                    ],
+                    p=0.55,
+                ),
+                A.RandomBrightnessContrast(brightness_limit=0.20, contrast_limit=0.20, p=0.5),
+                A.HueSaturationValue(hue_shift_limit=8, sat_shift_limit=15, val_shift_limit=10, p=0.3),
                 A.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
                 ToTensorV2(),
             ],
             bbox_params=A.BboxParams(
                 format="pascal_voc", label_fields=["labels"],
-                min_visibility=0.5, filter_invalid_bboxes=True,
+                min_visibility=0.999, filter_invalid_bboxes=True,
             ),
         )
     return A.Compose(
