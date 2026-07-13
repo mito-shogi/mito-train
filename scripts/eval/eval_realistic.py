@@ -33,12 +33,16 @@ from pathlib import Path
 import numpy as np
 import pyarrow.parquet as pq
 import torch
+from dotenv import load_dotenv
 from huggingface_hub import hf_hub_download
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from mito_train.datasets import build_transform
 from mito_train.datasets.sfen_utils import parse_sfen
 from mito_train.models import BoardOCR
+from mito_train.training.train_piece import _init_wandb
+
+load_dotenv(override=True)
 
 REPO_ID = "ultemica/piyoshogi-eval"
 CONFIG = "paired"
@@ -125,12 +129,21 @@ def load_eval_rows(devices: list[str], limit: int | None) -> dict[str, list[dict
     return per_dev
 
 
-def preprocess_row(row: dict, tf) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Decode -> crop by GT bbox -> tf(image=crop) -> tensor + parsed targets."""
+def preprocess_row(row: dict, tf) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None:
+    """Decode -> crop by GT bbox -> tf(image=crop) -> tensor + parsed targets.
+
+    Returns None if the source bytes are missing or the image cannot be decoded;
+    caller skips and increments a skip counter.
+    """
     im = row["image"]
     buf = im["bytes"] if isinstance(im, dict) else im
-    img = Image.open(io.BytesIO(buf))
-    img = img.convert("RGB") if img.mode != "RGB" else img
+    if not buf:
+        return None
+    try:
+        img = Image.open(io.BytesIO(buf))
+        img = img.convert("RGB") if img.mode != "RGB" else img
+    except UnidentifiedImageError:
+        return None
     arr = np.array(img)
     x1, y1, x2, y2 = row["bbox"]
     crop = arr[y1:y2, x1:x2]
@@ -147,19 +160,32 @@ def eval_backbone_device(model, tf, device_str: str, rows: list[dict],
                          batch_size: int) -> dict:
     acc = new_acc()
     xs, bts, hts = [], [], []
+    skipped = 0
+
+    def flush() -> None:
+        nonlocal xs, bts, hts
+        if not xs:
+            return
+        xb = torch.stack(xs).to(device_str)
+        bl, hl = model(xb)
+        accumulate(
+            bl.argmax(dim=1).cpu(), hl.argmax(dim=-1).cpu(),
+            torch.stack(bts), torch.stack(hts), acc,
+        )
+        xs, bts, hts = [], [], []
+
     with torch.no_grad():
-        for i, row in enumerate(rows):
-            x, bt, ht = preprocess_row(row, tf)
+        for row in rows:
+            got = preprocess_row(row, tf)
+            if got is None:
+                skipped += 1
+                continue
+            x, bt, ht = got
             xs.append(x); bts.append(bt); hts.append(ht)
-            if len(xs) == batch_size or i == len(rows) - 1:
-                xb = torch.stack(xs).to(device_str)
-                bl, hl = model(xb)
-                accumulate(
-                    bl.argmax(dim=1).cpu(), hl.argmax(dim=-1).cpu(),
-                    torch.stack(bts), torch.stack(hts), acc,
-                )
-                xs, bts, hts = [], [], []
-    return finalize(acc) | {"n": acc["n"]}
+            if len(xs) == batch_size:
+                flush()
+        flush()
+    return finalize(acc) | {"n": acc["n"], "skipped": skipped}
 
 
 def load_ocr_ckpt(ckpt_path: Path, device_str: str) -> tuple[torch.nn.Module, int, str]:
