@@ -20,6 +20,8 @@ import argparse
 from importlib.metadata import version as _pkg_version
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -506,6 +508,9 @@ def run(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # Pull HF_TOKEN / WANDB_API_KEY / CF_* out of .env into os.environ before
+    # any HF or wandb call resolves credentials. No-op if .env is missing.
+    load_dotenv()
     p = argparse.ArgumentParser()
     p.add_argument("--mode", choices=["smoke", "full"], default="smoke")
     p.add_argument("--backbone", default="mobilenet_v3_small",
