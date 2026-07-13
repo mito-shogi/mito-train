@@ -257,7 +257,7 @@ EPOCHS=50 IMAGE_SIZE=288 BACKBONES="mobilenet_v3_small convnext_atto convnext_ti
 RESUME_INCOMPLETE=1 EPOCHS=100 IMAGE_SIZE=288 ./scripts/train_backbones.sh
 ```
 
-W&B project: `mito-train-board-ocr`。今回の sweep run 一覧：
+W&B project: `mito-train-board-ocr`（当時。以降は `mito-train-board-ocr-w{image_size}-v{package_version}` に分割）。今回の sweep run 一覧：
 
 | Backbone | Run ID |
 |---|---|

@@ -139,7 +139,8 @@ resolve_run_state() {
 # and DDP modes. Returns the training exit code.
 run_single() {
     local BB="$1"
-    local ckpt_dir="${CKPT_ROOT}/board-ocr-${BB}"
+    local model_name="board-ocr-${BB}"
+    local ckpt_dir="${CKPT_ROOT}/${model_name}"
     local latest_ckpt="${ckpt_dir}/latest.pt"
     local final_ckpt="${ckpt_dir}/${final_ckpt_name}"
 
@@ -187,7 +188,7 @@ run_single() {
         --num-workers "${NUM_WORKERS}" \
         --prefetch-factor "${PREFETCH_FACTOR}" \
         --lr "${LR}" \
-        --ckpt-dir "${ckpt_dir}" \
+        --model-name "${model_name}" \
         "${extra_args[@]}" \
         "${per_run_extra[@]}"
     then
@@ -205,7 +206,8 @@ run_single() {
 # Its stdout+stderr is redirected to per-backbone log file. Sets $!.
 launch_parallel() {
     local BB="$1" gpu="$2"
-    local ckpt_dir="${CKPT_ROOT}/board-ocr-${BB}"
+    local model_name="board-ocr-${BB}"
+    local ckpt_dir="${CKPT_ROOT}/${model_name}"
     local latest_ckpt="${ckpt_dir}/latest.pt"
     local final_ckpt="${ckpt_dir}/${final_ckpt_name}"
     local log_file="${PARALLEL_LOG_DIR}/${BB}.log"
@@ -242,7 +244,7 @@ launch_parallel() {
         --num-workers "${NUM_WORKERS}" \
         --prefetch-factor "${PREFETCH_FACTOR}" \
         --lr "${LR}" \
-        --ckpt-dir "${ckpt_dir}" \
+        --model-name "${model_name}" \
         "${extra_args[@]}" \
         "${per_run_extra[@]}" \
         >"${log_file}" 2>&1 &

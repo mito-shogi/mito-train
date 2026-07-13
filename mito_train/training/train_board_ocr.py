@@ -17,12 +17,16 @@ metric all_reduce all activate only when actually distributed.
 from __future__ import annotations
 
 import argparse
+from importlib.metadata import version as _pkg_version
 from pathlib import Path
+
+from dotenv import load_dotenv
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
@@ -101,7 +105,7 @@ def compute_loss(
 
 METRIC_KEYS = (
     "board/cell_acc", "board/full_acc",
-    "hand/slot_acc", "hand/full_acc", "sfen/full_acc",
+    "hand/slot_acc", "hand/full_acc", "hand/mae", "sfen/full_acc",
 )
 
 
@@ -130,6 +134,9 @@ def compute_metrics(
         hand_slot_acc = hand_ok.float().mean()
         hand_all = hand_ok.all(dim=1)
         hand_full = hand_all.float().mean()
+        # MAE over all 14 slots — treats the count head as ordinal so
+        # "off by 1" is much better than "off by 9".
+        hand_mae = (hand_pred - hand_target).abs().float().mean()
 
         sfen_full = (board_all & hand_all).float().mean()
     return {
@@ -137,6 +144,7 @@ def compute_metrics(
         "board/full_acc": board_full,
         "hand/slot_acc": hand_slot_acc,
         "hand/full_acc": hand_full,
+        "hand/mae": hand_mae,
         "sfen/full_acc": sfen_full,
     }
 
@@ -275,25 +283,61 @@ def run(args: argparse.Namespace) -> None:
         model.parameters(), lr=args.lr, weight_decay=1e-4, fused=use_cuda,
     )
 
+    # Per-step scheduler: linear warmup for --warmup-epochs, then cosine anneal
+    # to lr * --min-lr-ratio over the remaining steps. Every rank steps in
+    # lockstep (same len(train_loader) shard size), so DDP stays in sync.
+    steps_per_epoch = len(train_loader)
+    total_steps = max(1, args.epochs * steps_per_epoch)
+    warmup_steps = max(0, args.warmup_epochs * steps_per_epoch)
+    scheduler: torch.optim.lr_scheduler.LRScheduler | None = None
+    if args.scheduler == "cosine":
+        cosine_steps = max(1, total_steps - warmup_steps)
+        eta_min = args.lr * args.min_lr_ratio
+        if warmup_steps > 0:
+            warmup = LinearLR(
+                optimizer, start_factor=1e-3, end_factor=1.0, total_iters=warmup_steps,
+            )
+            cosine = CosineAnnealingLR(optimizer, T_max=cosine_steps, eta_min=eta_min)
+            scheduler = SequentialLR(
+                optimizer, schedulers=[warmup, cosine], milestones=[warmup_steps],
+            )
+        else:
+            scheduler = CosineAnnealingLR(optimizer, T_max=cosine_steps, eta_min=eta_min)
+        log_main(
+            f"[board_ocr] scheduler=cosine peak_lr={args.lr:.2e} "
+            f"warmup={args.warmup_epochs}ep ({warmup_steps} steps) "
+            f"anneal={cosine_steps} steps -> min_lr={eta_min:.2e}"
+        )
+    else:
+        log_main(f"[board_ocr] scheduler=none lr={args.lr:.2e} (constant)")
+
+    ckpt_dir = args.ckpt_root / args.model_name
     if is_main():
-        args.ckpt_dir.mkdir(parents=True, exist_ok=True)
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
     start_epoch = 1
     resumed_from: str | None = None
     resumed_wandb_id: str | None = None
     if args.resume is not None:
-        ckpt_path = args.ckpt_dir / "latest.pt" if str(args.resume) == "latest" else args.resume
-        log_main(f"[board_ocr] resume from {ckpt_path}")
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-        _unwrap(model).load_state_dict(ckpt["model"])
-        optimizer.load_state_dict(ckpt["optimizer"])
-        if ckpt.get("scaler") is not None and scaler.is_enabled():
-            scaler.load_state_dict(ckpt["scaler"])
-        start_epoch = ckpt["epoch"] + 1
-        resumed_from = str(ckpt_path)
-        resumed_wandb_id = ckpt.get("wandb_run_id")
-        log_main(f"[board_ocr] resumed at epoch={start_epoch} (ckpt was epoch {ckpt['epoch']})")
-        if resumed_wandb_id:
-            log_main(f"[board_ocr] will resume wandb run id={resumed_wandb_id}")
+        ckpt_path = ckpt_dir / "latest.pt" if str(args.resume) == "latest" else args.resume
+        # `--resume latest` on a fresh model_name has no checkpoint to load — treat
+        # as fresh start so sweep scripts can pass --resume latest unconditionally.
+        if str(args.resume) == "latest" and not ckpt_path.exists():
+            log_main(f"[board_ocr] --resume latest requested but {ckpt_path} not found — starting fresh")
+        else:
+            log_main(f"[board_ocr] resume from {ckpt_path}")
+            ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+            _unwrap(model).load_state_dict(ckpt["model"])
+            optimizer.load_state_dict(ckpt["optimizer"])
+            if ckpt.get("scaler") is not None and scaler.is_enabled():
+                scaler.load_state_dict(ckpt["scaler"])
+            if ckpt.get("scheduler") is not None and scheduler is not None:
+                scheduler.load_state_dict(ckpt["scheduler"])
+            start_epoch = ckpt["epoch"] + 1
+            resumed_from = str(ckpt_path)
+            resumed_wandb_id = ckpt.get("wandb_run_id")
+            log_main(f"[board_ocr] resumed at epoch={start_epoch} (ckpt was epoch {ckpt['epoch']})")
+            if resumed_wandb_id:
+                log_main(f"[board_ocr] will resume wandb run id={resumed_wandb_id}")
 
     if args.wandb_run_id:
         resumed_wandb_id = args.wandb_run_id
@@ -301,8 +345,9 @@ def run(args: argparse.Namespace) -> None:
 
     # Only rank 0 talks to W&B; other ranks keep wandb_run=None and log nothing.
     run_name = args.backbone
+    wandb_project = f"mito-train-board-ocr-w{args.image_size}-v{_pkg_version('mito-train')}"
     wandb_run = _init_wandb(
-        project="mito-train-board-ocr",
+        project=wandb_project,
         run_name=run_name,
         run_id=resumed_wandb_id,
         resume="allow" if resumed_wandb_id else None,
@@ -315,6 +360,9 @@ def run(args: argparse.Namespace) -> None:
             "effective_batch_size": args.batch_size * world_size,
             "world_size": world_size,
             "lr": args.lr,
+            "scheduler": args.scheduler,
+            "warmup_epochs": args.warmup_epochs,
+            "min_lr_ratio": args.min_lr_ratio,
             "epochs": args.epochs,
             "start_epoch": start_epoch,
             "resumed_from": resumed_from,
@@ -366,6 +414,8 @@ def run(args: argparse.Namespace) -> None:
             scaler.scale(total).backward()
             scaler.step(optimizer)
             scaler.update()
+            if scheduler is not None:
+                scheduler.step()
             running_loss += total.detach()
             running_board_loss += bl.detach()
             running_hand_loss += hl.detach()
@@ -387,6 +437,7 @@ def run(args: argparse.Namespace) -> None:
                         "step/hand_loss": hl.item(),
                         "step/board/cell_acc": m["board/cell_acc"].item(),
                         "step/hand/slot_acc": m["hand/slot_acc"].item(),
+                        "step/lr": optimizer.param_groups[0]["lr"],
                         "step/global_step": global_step,
                         "step/epoch_frac": epoch - 1 + n_batches / len(train_loader),
                     })
@@ -406,6 +457,9 @@ def run(args: argparse.Namespace) -> None:
             f"[board_ocr] epoch={epoch:3d} "
             f"loss={avg_loss:.4f} (board={avg_bl:.4f} hand={avg_hl:.4f}) "
             f"cell_acc={avg['board/cell_acc']:.3f} "
+            f"board_acc={avg['board/full_acc']:.3f} "
+            f"hand_acc={avg['hand/full_acc']:.3f} "
+            f"hand_mae={avg['hand/mae']:.3f} "
             f"sfen_acc={avg['sfen/full_acc']:.3f}"
         )
 
@@ -446,6 +500,9 @@ def run(args: argparse.Namespace) -> None:
                 }
                 log_main(
                     f"[board_ocr]           val cell_acc={v_avg['board/cell_acc']:.3f} "
+                    f"board_acc={v_avg['board/full_acc']:.3f} "
+                    f"hand_acc={v_avg['hand/full_acc']:.3f} "
+                    f"hand_mae={v_avg['hand/mae']:.3f} "
                     f"sfen_acc={v_avg['sfen/full_acc']:.3f}"
                 )
                 wandb_log.update({f"val/{k}": v for k, v in v_avg.items()})
@@ -464,14 +521,15 @@ def run(args: argparse.Namespace) -> None:
                 "model": _unwrap(model).state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "scaler": scaler.state_dict() if scaler.is_enabled() else None,
+                "scheduler": scheduler.state_dict() if scheduler is not None else None,
                 "backbone": args.backbone,
                 "image_size": args.image_size,
                 "hand_weight": args.hand_weight,
                 "wandb_run_id": wandb_run.id if wandb_run is not None else None,
             }
-            torch.save(ckpt_payload, args.ckpt_dir / "latest.pt")
+            torch.save(ckpt_payload, ckpt_dir / "latest.pt")
             if epoch % args.save_every == 0 or epoch == args.epochs:
-                torch.save(ckpt_payload, args.ckpt_dir / f"epoch-{epoch:03d}.pt")
+                torch.save(ckpt_payload, ckpt_dir / f"epoch-{epoch:03d}.pt")
 
     if wandb_run is not None:
         wandb_run.finish()
@@ -488,6 +546,11 @@ def run(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # Pull HF_TOKEN / WANDB_API_KEY / CF_* out of .env into os.environ before
+    # any HF or wandb call resolves credentials. No-op if .env is missing.
+    # override=True so devcontainer.json's ${localEnv:...} forwards that expand
+    # to an empty string on hosts without those vars don't win over .env.
+    load_dotenv(override=True)
     p = argparse.ArgumentParser()
     p.add_argument("--mode", choices=["smoke", "full"], default="smoke")
     p.add_argument("--backbone", default="mobilenet_v3_small",
@@ -525,6 +588,12 @@ def main() -> None:
                    help="torch.compile the model. Worth measuring for full runs; "
                         "compile overhead usually not worth it for smoke runs.")
     p.add_argument("--lr", type=float, default=3e-4)
+    p.add_argument("--scheduler", choices=["none", "cosine"], default="cosine",
+                   help="Per-step LR schedule. cosine = linear warmup then cosine anneal.")
+    p.add_argument("--warmup-epochs", type=int, default=5,
+                   help="Epochs of linear warmup (0 -> lr). Ignored when --scheduler=none.")
+    p.add_argument("--min-lr-ratio", type=float, default=0.01,
+                   help="Cosine anneal floor as a fraction of --lr (min_lr = lr * ratio).")
     p.add_argument("--hand-mode", choices=["classification", "regression"],
                    default="classification",
                    help="classification: 14x19 logits + CE. regression: 14 scalars + SmoothL1.")
@@ -537,14 +606,20 @@ def main() -> None:
     p.add_argument("--val-every", type=int, default=2)
     p.add_argument("--log-every", type=int, default=20,
                    help="Log per-step train metrics to W&B every N batches.")
-    p.add_argument("--ckpt-dir", type=Path, default=Path("./runs/board-ocr"))
+    p.add_argument("--model-name", type=str, default=None,
+                   help="Run identifier. Checkpoints go to <ckpt-root>/<model-name>/. "
+                        "Defaults to 'board-ocr-<backbone>'.")
+    p.add_argument("--ckpt-root", type=Path, default=Path("./runs"),
+                   help="Directory under which each run gets its own <model-name>/ subdir.")
     p.add_argument("--save-every", type=int, default=5,
                    help="Interval for saving epoch-{N}.pt snapshots. latest.pt is saved every epoch.")
     p.add_argument("--resume", type=Path, default=None,
-                   help="Checkpoint path. Pass 'latest' to load --ckpt-dir/latest.pt.")
+                   help="Checkpoint path. Pass 'latest' to load ./runs/<model-name>/latest.pt.")
     p.add_argument("--wandb-run-id", type=str, default=None,
                    help="Force resume this W&B run id (overrides ckpt's stored id).")
     args = p.parse_args()
+    if args.model_name is None:
+        args.model_name = f"board-ocr-{args.backbone}"
     run(args)
 
 

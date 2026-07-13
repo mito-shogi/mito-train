@@ -18,6 +18,8 @@ import argparse
 import os
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -219,6 +221,11 @@ def run_manifest(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    # Pull WANDB_API_KEY / CF_* / HF_TOKEN out of .env into os.environ before
+    # any wandb or HF call resolves credentials. No-op if .env is missing.
+    # override=True so devcontainer.json's ${localEnv:...} forwards that expand
+    # to an empty string on hosts without those vars don't win over .env.
+    load_dotenv(override=True)
     p = argparse.ArgumentParser()
     p.add_argument("--mode", choices=["smoke", "manifest"], default="smoke")
     # smoke-mode args
