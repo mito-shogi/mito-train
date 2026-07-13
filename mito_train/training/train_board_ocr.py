@@ -102,7 +102,7 @@ def compute_loss(
 
 METRIC_KEYS = (
     "board/cell_acc", "board/full_acc",
-    "hand/slot_acc", "hand/full_acc", "sfen/full_acc",
+    "hand/slot_acc", "hand/full_acc", "hand/mae", "sfen/full_acc",
 )
 
 
@@ -131,6 +131,9 @@ def compute_metrics(
         hand_slot_acc = hand_ok.float().mean()
         hand_all = hand_ok.all(dim=1)
         hand_full = hand_all.float().mean()
+        # MAE over all 14 slots — treats the count head as ordinal so
+        # "off by 1" is much better than "off by 9".
+        hand_mae = (hand_pred - hand_target).abs().float().mean()
 
         sfen_full = (board_all & hand_all).float().mean()
     return {
@@ -138,6 +141,7 @@ def compute_metrics(
         "board/full_acc": board_full,
         "hand/slot_acc": hand_slot_acc,
         "hand/full_acc": hand_full,
+        "hand/mae": hand_mae,
         "sfen/full_acc": sfen_full,
     }
 
@@ -276,25 +280,31 @@ def run(args: argparse.Namespace) -> None:
         model.parameters(), lr=args.lr, weight_decay=1e-4, fused=use_cuda,
     )
 
+    ckpt_dir = args.ckpt_root / args.model_name
     if is_main():
-        args.ckpt_dir.mkdir(parents=True, exist_ok=True)
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
     start_epoch = 1
     resumed_from: str | None = None
     resumed_wandb_id: str | None = None
     if args.resume is not None:
-        ckpt_path = args.ckpt_dir / "latest.pt" if str(args.resume) == "latest" else args.resume
-        log_main(f"[board_ocr] resume from {ckpt_path}")
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-        _unwrap(model).load_state_dict(ckpt["model"])
-        optimizer.load_state_dict(ckpt["optimizer"])
-        if ckpt.get("scaler") is not None and scaler.is_enabled():
-            scaler.load_state_dict(ckpt["scaler"])
-        start_epoch = ckpt["epoch"] + 1
-        resumed_from = str(ckpt_path)
-        resumed_wandb_id = ckpt.get("wandb_run_id")
-        log_main(f"[board_ocr] resumed at epoch={start_epoch} (ckpt was epoch {ckpt['epoch']})")
-        if resumed_wandb_id:
-            log_main(f"[board_ocr] will resume wandb run id={resumed_wandb_id}")
+        ckpt_path = ckpt_dir / "latest.pt" if str(args.resume) == "latest" else args.resume
+        # `--resume latest` on a fresh model_name has no checkpoint to load — treat
+        # as fresh start so sweep scripts can pass --resume latest unconditionally.
+        if str(args.resume) == "latest" and not ckpt_path.exists():
+            log_main(f"[board_ocr] --resume latest requested but {ckpt_path} not found — starting fresh")
+        else:
+            log_main(f"[board_ocr] resume from {ckpt_path}")
+            ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+            _unwrap(model).load_state_dict(ckpt["model"])
+            optimizer.load_state_dict(ckpt["optimizer"])
+            if ckpt.get("scaler") is not None and scaler.is_enabled():
+                scaler.load_state_dict(ckpt["scaler"])
+            start_epoch = ckpt["epoch"] + 1
+            resumed_from = str(ckpt_path)
+            resumed_wandb_id = ckpt.get("wandb_run_id")
+            log_main(f"[board_ocr] resumed at epoch={start_epoch} (ckpt was epoch {ckpt['epoch']})")
+            if resumed_wandb_id:
+                log_main(f"[board_ocr] will resume wandb run id={resumed_wandb_id}")
 
     if args.wandb_run_id:
         resumed_wandb_id = args.wandb_run_id
@@ -408,6 +418,9 @@ def run(args: argparse.Namespace) -> None:
             f"[board_ocr] epoch={epoch:3d} "
             f"loss={avg_loss:.4f} (board={avg_bl:.4f} hand={avg_hl:.4f}) "
             f"cell_acc={avg['board/cell_acc']:.3f} "
+            f"board_acc={avg['board/full_acc']:.3f} "
+            f"hand_acc={avg['hand/full_acc']:.3f} "
+            f"hand_mae={avg['hand/mae']:.3f} "
             f"sfen_acc={avg['sfen/full_acc']:.3f}"
         )
 
@@ -448,6 +461,9 @@ def run(args: argparse.Namespace) -> None:
                 }
                 log_main(
                     f"[board_ocr]           val cell_acc={v_avg['board/cell_acc']:.3f} "
+                    f"board_acc={v_avg['board/full_acc']:.3f} "
+                    f"hand_acc={v_avg['hand/full_acc']:.3f} "
+                    f"hand_mae={v_avg['hand/mae']:.3f} "
                     f"sfen_acc={v_avg['sfen/full_acc']:.3f}"
                 )
                 wandb_log.update({f"val/{k}": v for k, v in v_avg.items()})
@@ -471,9 +487,9 @@ def run(args: argparse.Namespace) -> None:
                 "hand_weight": args.hand_weight,
                 "wandb_run_id": wandb_run.id if wandb_run is not None else None,
             }
-            torch.save(ckpt_payload, args.ckpt_dir / "latest.pt")
+            torch.save(ckpt_payload, ckpt_dir / "latest.pt")
             if epoch % args.save_every == 0 or epoch == args.epochs:
-                torch.save(ckpt_payload, args.ckpt_dir / f"epoch-{epoch:03d}.pt")
+                torch.save(ckpt_payload, ckpt_dir / f"epoch-{epoch:03d}.pt")
 
     if wandb_run is not None:
         wandb_run.finish()
@@ -539,14 +555,20 @@ def main() -> None:
     p.add_argument("--val-every", type=int, default=2)
     p.add_argument("--log-every", type=int, default=20,
                    help="Log per-step train metrics to W&B every N batches.")
-    p.add_argument("--ckpt-dir", type=Path, default=Path("./runs/board-ocr"))
+    p.add_argument("--model-name", type=str, default=None,
+                   help="Run identifier. Checkpoints go to <ckpt-root>/<model-name>/. "
+                        "Defaults to 'board-ocr-<backbone>'.")
+    p.add_argument("--ckpt-root", type=Path, default=Path("./runs"),
+                   help="Directory under which each run gets its own <model-name>/ subdir.")
     p.add_argument("--save-every", type=int, default=5,
                    help="Interval for saving epoch-{N}.pt snapshots. latest.pt is saved every epoch.")
     p.add_argument("--resume", type=Path, default=None,
-                   help="Checkpoint path. Pass 'latest' to load --ckpt-dir/latest.pt.")
+                   help="Checkpoint path. Pass 'latest' to load ./runs/<model-name>/latest.pt.")
     p.add_argument("--wandb-run-id", type=str, default=None,
                    help="Force resume this W&B run id (overrides ckpt's stored id).")
     args = p.parse_args()
+    if args.model_name is None:
+        args.model_name = f"board-ocr-{args.backbone}"
     run(args)
 
 

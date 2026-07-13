@@ -31,7 +31,7 @@ IMAGE_SIZE=${IMAGE_SIZE:-224}
 LR=${LR:-3e-4}
 BACKBONE=${BACKBONE:-mobilenet_v3_small}
 HF_REPO_ID=${HF_REPO_ID:-ultemica/piyoshogi}
-CKPT_DIR=${CKPT_DIR:-./runs/board-ocr-${BACKBONE}}
+MODEL_NAME=${MODEL_NAME:-board-ocr-${BACKBONE}}
 SAVE_EVERY=${SAVE_EVERY:-5}
 
 extra_args=(--preload)
@@ -48,7 +48,7 @@ fi
 echo "[train_multi_gpu] nproc=${NPROC_PER_NODE} backbone=${BACKBONE} batch=${BATCH_SIZE} (per rank)"
 echo "[train_multi_gpu] effective batch = ${BATCH_SIZE} x ${NPROC_PER_NODE} = $(( BATCH_SIZE * NPROC_PER_NODE ))"
 echo "[train_multi_gpu] workers=${PER_GPU_WORKERS} per rank ($(( PER_GPU_WORKERS * NPROC_PER_NODE )) total)"
-echo "[train_multi_gpu] ckpt_dir=${CKPT_DIR}"
+echo "[train_multi_gpu] model_name=${MODEL_NAME} (ckpt_dir=./runs/${MODEL_NAME})"
 
 # --standalone: single-node rendezvous, avoids setting MASTER_ADDR/MASTER_PORT
 #               manually for the common single-host case.
@@ -66,6 +66,6 @@ uv run torchrun \
     --num-workers "${PER_GPU_WORKERS}" \
     --prefetch-factor "${PREFETCH_FACTOR}" \
     --lr "${LR}" \
-    --ckpt-dir "${CKPT_DIR}" \
+    --model-name "${MODEL_NAME}" \
     --save-every "${SAVE_EVERY}" \
     "${extra_args[@]}"
