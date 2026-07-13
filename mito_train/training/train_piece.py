@@ -70,7 +70,9 @@ def _init_wandb(
         print("[wandb] injected CF Access headers.")
 
     settings = wandb.Settings(**settings_kwargs) if settings_kwargs else None
-    init_kwargs = dict(project=project, name=run_name, config=config, settings=settings)
+    log_dir = Path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    init_kwargs = dict(project=project, name=run_name, config=config, settings=settings, dir=str(log_dir))
     if run_id is not None:
         init_kwargs["id"] = run_id
         init_kwargs["resume"] = resume or "allow"
