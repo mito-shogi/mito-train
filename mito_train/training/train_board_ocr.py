@@ -510,7 +510,9 @@ def run(args: argparse.Namespace) -> None:
 def main() -> None:
     # Pull HF_TOKEN / WANDB_API_KEY / CF_* out of .env into os.environ before
     # any HF or wandb call resolves credentials. No-op if .env is missing.
-    load_dotenv()
+    # override=True so devcontainer.json's ${localEnv:...} forwards that expand
+    # to an empty string on hosts without those vars don't win over .env.
+    load_dotenv(override=True)
     p = argparse.ArgumentParser()
     p.add_argument("--mode", choices=["smoke", "full"], default="smoke")
     p.add_argument("--backbone", default="mobilenet_v3_small",
