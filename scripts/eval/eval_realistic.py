@@ -37,12 +37,28 @@ from dotenv import load_dotenv
 from huggingface_hub import hf_hub_download
 from PIL import Image, UnidentifiedImageError
 
-from mito_train.datasets import build_transform
-from mito_train.datasets.sfen_utils import parse_sfen
-from mito_train.models import BoardOCR
-from mito_train.training.train_piece import _init_wandb
-
+# Load .env first so subsequent os.environ reads see the credentials.
 load_dotenv(override=True)
+
+# self-hosted wandb (wandb.tkgstrator.work) sits behind Cloudflare Access. The
+# `wandb.Settings(_extra_http_headers=…)` path only reaches the requests-Session,
+# not wandb-core, so uploads silently fail. Injecting WANDB__EXTRA_HTTP_HEADERS
+# as an env var *before* wandb imports covers the core path too. See
+# ~/.claude/…/memory/reference_wandb_cf_access.md
+import json as _json  # noqa: E402
+import os as _os  # noqa: E402
+_cf_id = _os.environ.get("CF_ACCESS_CLIENT_ID")
+_cf_secret = _os.environ.get("CF_ACCESS_CLIENT_SECRET")
+if _cf_id and _cf_secret and not _os.environ.get("WANDB__EXTRA_HTTP_HEADERS"):
+    _os.environ["WANDB__EXTRA_HTTP_HEADERS"] = _json.dumps({
+        "CF-Access-Client-Id": _cf_id,
+        "CF-Access-Client-Secret": _cf_secret,
+    })
+
+from mito_train.datasets import build_transform  # noqa: E402
+from mito_train.datasets.sfen_utils import parse_sfen  # noqa: E402
+from mito_train.models import BoardOCR  # noqa: E402
+from mito_train.training.train_piece import _init_wandb  # noqa: E402
 
 REPO_ID = "ultemica/piyoshogi-eval"
 CONFIG = "paired"
