@@ -1,6 +1,6 @@
 [project]
 name = "mito-train"
-version = "0.3.1"
+version = "0.3.2"
 description = "ぴよ将棋OCR 3モデル (board-detector / piece-classifier / hand-classifier) の学習・ONNX出力"
 requires-python = ">=3.11"
 dependencies = [
