@@ -14,6 +14,7 @@ MITO ↔ mito-train 契約と mito-train 固有ドキュメント。
 - `ocr-scaling-outlook.md` — sweep 結果からのエポック数・画像サイズ増の効き見込み (w224 版, 2026-07-12)
 - `w384-sweep-analysis.md` — w384 backbone sweep の考察 (収束速度・過剰 epoch・train↔val ギャップ, 2026-07-13)
 - `resolution-tradeoff.md` — 学習/推論解像度 (w224 vs w384) の運用トレードオフと配信別の推奨
+- `browser-inference-outlook.md` — ブラウザ WebGPU の推論時間見積もり (iGPU / iOS / Android × 5 backbone、2026-07-13)
 
 ## データセットの正規
 
