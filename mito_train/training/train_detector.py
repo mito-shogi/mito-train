@@ -101,6 +101,9 @@ def main() -> None:
     p.add_argument("--hf-repo-id", default=None,
                    help="If set, load train/val from this HF dataset repo instead of local jsonl.")
     p.add_argument("--hf-config", default="detector_paired")
+    p.add_argument("--best-metric", default="iou_mean",
+                   choices=["iou_mean", "iou@0.5", "iou@0.75", "iou@0.9"],
+                   help="Metric to select best.pt on (higher-is-better).")
     args = p.parse_args()
 
     device = get_device()
@@ -131,11 +134,13 @@ def main() -> None:
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs)
 
     start_epoch = 0
+    best_metric = float("-inf")
     if args.resume_from and args.resume_from.exists():
         ck = torch.load(args.resume_from, map_location=device, weights_only=False)
         model.load_state_dict(ck["model"])
         opt.load_state_dict(ck["optimizer"])
         start_epoch = ck.get("epoch", 0) + 1
+        best_metric = ck.get("best_metric", float("-inf"))
         print(f"[detector] resumed from {args.resume_from} @ epoch {start_epoch}")
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -174,13 +179,21 @@ def main() -> None:
         if run is not None:
             run.log({"train/loss": train_loss, "train/lr": sched.get_last_lr()[0], **{f"val/{k}": v for k, v in metrics.items()}}, step=epoch)
 
+        current_metric = metrics[args.best_metric]
+        is_best = current_metric > best_metric
+        if is_best:
+            best_metric = current_metric
         ck_path = args.out_dir / "latest.pt"
-        torch.save(
-            {"epoch": epoch, "model": model.state_dict(), "optimizer": opt.state_dict(),
-             "backbone": "mobilenet_v3_small", "image_size": args.image_size,
-             "devices": sorted(train_ds.bboxes), "wandb_run_id": run.id if run else None},
-            ck_path,
-        )
+        payload = {
+            "epoch": epoch, "model": model.state_dict(), "optimizer": opt.state_dict(),
+            "backbone": "mobilenet_v3_small", "image_size": args.image_size,
+            "devices": sorted(train_ds.bboxes), "wandb_run_id": run.id if run else None,
+            "best_metric": best_metric, "best_metric_name": args.best_metric,
+        }
+        torch.save(payload, ck_path)
+        if is_best:
+            torch.save(payload, args.out_dir / "best.pt")
+            print(f"[detector] new best {args.best_metric}={current_metric:.4f} -> best.pt")
 
     print("[detector] done.")
 
