@@ -403,9 +403,12 @@ def main() -> None:
     p.add_argument("--batch-size", type=int, default=8)
     p.add_argument("--num-workers", type=int, default=0)
     p.add_argument("--lr", type=float, default=3e-4)
+    p.add_argument("--hand-mode", choices=["classification", "regression"],
+                   default="classification",
+                   help="classification: 14x19 logits + CE. regression: 14 scalars + SmoothL1.")
     p.add_argument("--hand-weight", type=float, default=1.0)
     p.add_argument("--hand-class-weight", action="store_true", default=True,
-                   help="Use sqrt(1/freq) class weights on hand CE.")
+                   help="Use sqrt(1/freq) class weights on hand CE (ignored under --hand-mode=regression).")
     p.add_argument("--no-hand-class-weight", dest="hand_class_weight", action="store_false")
     p.add_argument("--class-weight-clip-min", type=float, default=0.5)
     p.add_argument("--class-weight-clip-max", type=float, default=10.0)
