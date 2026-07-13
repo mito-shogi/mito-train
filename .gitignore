@@ -259,6 +259,7 @@ data/
 # 学習中間物
 runs/
 wandb/
+logs/
 checkpoints/
 *.pt
 *.pth

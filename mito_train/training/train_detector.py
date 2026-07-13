@@ -156,7 +156,7 @@ def main() -> None:
             f"@0.9={metrics['iou@0.9']:.3f}"
         )
         if run is not None:
-            run.log({"train/loss": train_loss, "lr": sched.get_last_lr()[0], **{f"val/{k}": v for k, v in metrics.items()}}, step=epoch)
+            run.log({"train/loss": train_loss, "train/lr": sched.get_last_lr()[0], **{f"val/{k}": v for k, v in metrics.items()}}, step=epoch)
 
         ck_path = args.out_dir / "latest.pt"
         torch.save(

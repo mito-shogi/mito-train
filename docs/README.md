@@ -10,6 +10,8 @@ MITO ↔ mito-train 契約と mito-train 固有ドキュメント。
 ## mito-train 固有
 
 - `piyo-piece-templates.md` — 駒テンプレの命名規則 (14 デザイン × 30 駒)
+- `backbones.md` — BoardOCR がサポートする 9 バックボーンの params / 用途 / 配信先まとめ
+- `ocr-scaling-outlook.md` — sweep 結果からのエポック数・画像サイズ増の効き見込み
 
 ## データセットの正規
 

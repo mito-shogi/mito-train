@@ -70,7 +70,9 @@ def _init_wandb(
         print("[wandb] injected CF Access headers.")
 
     settings = wandb.Settings(**settings_kwargs) if settings_kwargs else None
-    init_kwargs = dict(project=project, name=run_name, config=config, settings=settings)
+    log_dir = Path("logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    init_kwargs = dict(project=project, name=run_name, config=config, settings=settings, dir=str(log_dir))
     if run_id is not None:
         init_kwargs["id"] = run_id
         init_kwargs["resume"] = resume or "allow"
@@ -172,7 +174,7 @@ def run_smoke(args: argparse.Namespace) -> None:
         if epoch % args.log_every == 0 or epoch in (start_epoch, args.epochs):
             print(f"[smoke] epoch={epoch:3d} loss={avg_loss:.4f} acc={acc:.4f}")
         if run is not None:
-            run.log({"train/loss": avg_loss, "train/acc": acc, "epoch": epoch})
+            run.log({"train/loss": avg_loss, "train/acc": acc, "train/epoch": epoch})
 
         ckpt_payload = {
             "epoch": epoch,
