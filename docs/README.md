@@ -11,7 +11,8 @@ MITO ↔ mito-train 契約と mito-train 固有ドキュメント。
 
 - `piyo-piece-templates.md` — 駒テンプレの命名規則 (14 デザイン × 30 駒)
 - `backbones.md` — BoardOCR がサポートする 9 バックボーンの params / 用途 / 配信先まとめ
-- `ocr-scaling-outlook.md` — sweep 結果からのエポック数・画像サイズ増の効き見込み
+- `ocr-scaling-outlook.md` — sweep 結果からのエポック数・画像サイズ増の効き見込み (w224 版, 2026-07-12)
+- `w384-sweep-analysis.md` — w384 backbone sweep の考察 (収束速度・過剰 epoch・train↔val ギャップ, 2026-07-13)
 
 ## データセットの正規
 

@@ -5,7 +5,7 @@ board_ocr の学習を回しながら気づいた改善候補と、次のイテ�
 
 ## 現状の観測（2026-07-13 w384 backbone sweep）
 
-`scripts/train_backbones.sh` を **IMAGE_SIZE=384 / 最大 200 epoch** で 5 backbone 実施（wandb project: `mito-train-board-ocr-w384-v0.3.1`）。§A の hand regression、§B の class weight sqrt+clip、§C の hand_weight=1.0、§D の cosine + warmup、X-1 の hand logit マスキングは全て入った状態での測定。
+`scripts/train_backbones.sh` を **IMAGE_SIZE=384 / 最大 200 epoch** で 5 backbone 実施（wandb project: `mito-train-board-ocr-w384-v0.3.1`）。§A の hand regression、§B の class weight sqrt+clip、§C の hand_weight=1.0、§D の cosine + warmup、X-1 の hand logit マスキングは全て入った状態での測定。詳細な収束速度・過剰 epoch・train↔val ギャップの分析は [`docs/w384-sweep-analysis.md`](./docs/w384-sweep-analysis.md) に集約。
 
 sweep のサマリ（val, 最終エポック）：
 
