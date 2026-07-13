@@ -8,9 +8,10 @@ services:
       # workspace root is two levels up.
       - ../../:/home/vscode/app:cached
       - venv:/home/vscode/app/.venv
-      # Persistent HF datasets cache so `HFCaptureDataset` doesn't re-download
-      # the ~21GB parquet shards on container rebuild.
-      - hf-cache:/home/vscode/.cache/huggingface
+      # Persistent per-user cache dir. Covers HF datasets (~21GB parquet
+      # shards for `HFCaptureDataset`), uv package cache, and anything else
+      # that would otherwise cost time to rebuild on container recreation.
+      - cache:/home/vscode/.cache
     # DataLoader workers on CUDA can consume more shared memory than the
     # default 64MB; 16GB matches typical CUDA training rigs.
     shm_size: 16gb
@@ -29,5 +30,5 @@ services:
 volumes:
   venv:
     driver: local
-  hf-cache:
+  cache:
     driver: local

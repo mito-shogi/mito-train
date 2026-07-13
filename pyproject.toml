@@ -1,10 +1,13 @@
 [project]
 name = "mito-train"
-version = "0.1.1"
+version = "0.2.0"
 description = "ぴよ将棋OCR 3モデル (board-detector / piece-classifier / hand-classifier) の学習・ONNX出力"
 requires-python = ">=3.11"
 dependencies = [
     "albumentations>=2.0.8",
+    "datasets>=5.0.0",
+    "hf-transfer>=0.1.9",
+    "huggingface-hub>=1.22.0",
     "matplotlib>=3.11.0",
     "numpy>=2.4.6",
     "onnx>=1.22.0",
@@ -14,6 +17,7 @@ dependencies = [
     "pillow>=12.3.0",
     "python-shogi>=1.1.1",
     "pyyaml>=6.0.3",
+    "timm>=1.0.28",
     "torch>=2.12.1",
     "torchvision>=0.27.1",
     "tqdm>=4.68.4",
@@ -35,10 +39,3 @@ packages = ["mito_train"]
 # キャッシュと .venv が別ファイルシステム (マウントボリューム) なので
 # ハードリンク不可 → copy に固定して警告を抑止。
 link-mode = "copy"
-
-[dependency-groups]
-upload = [
-    "datasets>=5.0.0",
-    "hf-transfer>=0.1.9",
-    "huggingface-hub>=1.22.0",
-]
