@@ -108,8 +108,13 @@ def main() -> None:
 
     train_tf = build_detector_transform("train", args.image_size)
     val_tf = build_detector_transform("val", args.image_size)
-    train_ds = DetectorDataset(args.train_manifest, args.data_root, args.bboxes_json, train_tf)
-    val_ds = DetectorDataset(args.val_manifest, args.data_root, args.bboxes_json, val_tf)
+    if args.hf_repo_id:
+        train_ds = HFDetectorDataset(args.hf_repo_id, "train", train_tf, config_name=args.hf_config, image_size=args.image_size)
+        val_ds = HFDetectorDataset(args.hf_repo_id, "val", val_tf, config_name=args.hf_config, image_size=args.image_size)
+        print(f"[detector] hf={args.hf_repo_id}/{args.hf_config}")
+    else:
+        train_ds = DetectorDataset(args.train_manifest, args.data_root, args.bboxes_json, train_tf)
+        val_ds = DetectorDataset(args.val_manifest, args.data_root, args.bboxes_json, val_tf)
     print(f"[detector] train={len(train_ds)}, val={len(val_ds)}, devices={sorted(train_ds.bboxes)}")
 
     train_loader = DataLoader(
