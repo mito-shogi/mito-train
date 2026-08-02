@@ -51,6 +51,7 @@
             "extensions": [
                 "EditorConfig.EditorConfig",
                 "PKief.material-icon-theme",
+                "WakaTime.vscode-wakatime",
                 "antfu.file-nesting",
                 "anthropic.claude-code",
                 "bierner.markdown-preview-github-styles",
